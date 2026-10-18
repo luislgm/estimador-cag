@@ -82,6 +82,29 @@ uv run uvicorn app.main:app --reload
 
 La API queda disponible en http://127.0.0.1:8000.
 
+### Con Docker
+
+Con el `.env` configurado:
+
+```bash
+docker compose up --build
+```
+
+O sin Compose:
+
+```bash
+docker build -t estimador-cag .
+docker run --rm -p 8000:8000 --env-file .env estimador-cag
+```
+
+La imagen se publica automáticamente en GitHub Container Registry con cada push a `main`:
+
+```bash
+docker run --rm -p 8000:8000 --env-file .env ghcr.io/luislgm/estimador-cag:latest
+```
+
+> El `.env` nunca se copia dentro de la imagen (está en `.dockerignore`): la configuración se pasa al arrancar el contenedor.
+
 ## Documentación de la API
 
 FastAPI genera la documentación automáticamente:
@@ -147,6 +170,27 @@ Devuelve el estado del servicio y la configuración activa.
   "model": "claude-haiku-4-5"
 }
 ```
+
+## Tests y calidad de código
+
+Los tests simulan la llamada al LLM, así que no necesitan API key ni consumen tokens.
+
+```bash
+uv run pytest --cov          # tests con cobertura (mínimo 80 %)
+uv run ruff check .          # lint
+uv run ruff format .         # formatear el código
+```
+
+## Integración continua
+
+El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en cada push y pull request a `main`:
+
+| Job | Qué comprueba |
+|---|---|
+| **Lint y formato** | `ruff check` y `ruff format --check` |
+| **Tests** | Instala desde `uv.lock`, compila el código y pasa los tests con cobertura en Python 3.11, 3.12 y 3.13 |
+| **Auditoría de dependencias** | `pip-audit` busca vulnerabilidades conocidas en las dependencias |
+| **Imagen Docker** | Construye la imagen, arranca el contenedor y comprueba que `/health` y `/docs` responden. En push a `main` la publica en `ghcr.io` con las etiquetas `latest` y `sha-<commit>` |
 
 ## Ejemplos de contexto
 

@@ -1,0 +1,21 @@
+# Secretos: nunca dentro de la imagen
+.env
+
+# Entorno local y cachés
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# No necesarios para ejecutar la API
+.git/
+.github/
+.vscode/
+.idea/
+tests/
+README.md
+Dockerfile
+docker-compose.yml

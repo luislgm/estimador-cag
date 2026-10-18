@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import anthropic
 from fastapi import APIRouter, HTTPException
@@ -51,5 +51,5 @@ async def estimate(request: EstimationRequest) -> EstimationResponse:
             output_tokens=result.output_tokens,
             total_tokens=result.input_tokens + result.output_tokens,
         ),
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )

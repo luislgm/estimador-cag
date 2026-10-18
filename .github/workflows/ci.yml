@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Si llega un push nuevo a la misma rama, cancela la ejecución anterior
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Configuración ficticia: los tests nunca llaman a la API real
+  ANTHROPIC_API_KEY: ci-dummy-key
+  LLM_PROVIDER: anthropic
+  LLM_MODEL: claude-haiku-4-5
+
+jobs:
+  lint:
+    name: Lint y formato
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - name: Ruff (lint)
+        run: uv run ruff check --output-format=github .
+      - name: Ruff (formato)
+        run: uv run ruff format --check .
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Instalar dependencias (lockfile)
+        run: uv sync --locked
+      - name: Compilar
+        run: uv run python -m compileall -q app
+      - name: Tests con cobertura
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml
+      - name: Subir informe de cobertura
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+
+  audit:
+    name: Auditoría de dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Exportar dependencias del lockfile
+        run: uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+      - name: pip-audit (vulnerabilidades conocidas)
+        run: uvx pip-audit -r requirements.txt --require-hashes --disable-pip
+
+  docker:
+    name: Imagen Docker
+    runs-on: ubuntu-latest
+    needs: [lint, test, audit]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construir imagen
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: estimador-cag:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Arrancar contenedor y comprobar /health y /docs
+        run: |
+          docker run -d --name api -p 8000:8000 \
+            -e ANTHROPIC_API_KEY -e LLM_PROVIDER -e LLM_MODEL \
+            estimador-cag:ci
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/health && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8000/health | grep '"status":"ok"'
+          curl -sf -o /dev/null http://127.0.0.1:8000/docs
+
+      - name: Logs del contenedor
+        if: failure()
+        run: docker logs api
+
+      # CD: solo se publica en push a main, nunca desde pull requests
+      - name: Login en GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Etiquetas de la imagen
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Publicar imagen
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

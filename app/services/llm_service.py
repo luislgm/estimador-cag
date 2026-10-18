@@ -23,7 +23,7 @@ las suposiciones al final de la estimación."""
 def build_system_prompt() -> str:
     """Construye el system prompt con las instrucciones y los ejemplos de contexto (CAG)."""
     examples = "\n\n".join(
-        f"<ejemplo numero=\"{i}\">\n"
+        f'<ejemplo numero="{i}">\n'
         f"<resumen_reunion>\n{example['meeting_summary']}\n</resumen_reunion>\n"
         f"<estimacion>\n{example['estimation'].strip()}\n</estimacion>\n"
         f"</ejemplo>"
