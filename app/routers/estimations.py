@@ -2,35 +2,12 @@ from datetime import UTC, datetime
 
 import anthropic
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.schemas.estimation import EstimationRequest, EstimationResponse, TokenUsage
 from app.services.llm_service import generate_estimation
 
 router = APIRouter(tags=["estimations"])
-
-
-class EstimationRequest(BaseModel):
-    transcription: str = Field(
-        ...,
-        min_length=1,
-        description="Texto de la transcripción de la reunión",
-        examples=["En la reunión con el cliente se discutió la necesidad de..."],
-    )
-
-
-class TokenUsage(BaseModel):
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-
-
-class EstimationResponse(BaseModel):
-    estimation: str
-    model: str
-    provider: str
-    usage: TokenUsage
-    created_at: datetime
 
 
 @router.post("/estimate", response_model=EstimationResponse)

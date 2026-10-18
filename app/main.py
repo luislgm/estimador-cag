@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.routers import estimations
+from app.schemas.health import HealthResponse
 
 app = FastAPI(
     title="Estimador CAG",
@@ -16,12 +17,12 @@ app = FastAPI(
 app.include_router(estimations.router, prefix="/api/v1")
 
 
-@app.get("/health", tags=["health"])
-async def health() -> dict:
+@app.get("/health", tags=["health"], response_model=HealthResponse)
+async def health() -> HealthResponse:
     settings = get_settings()
-    return {
-        "status": "ok",
-        "environment": settings.app_env,
-        "provider": settings.llm_provider,
-        "model": settings.llm_model,
-    }
+    return HealthResponse(
+        status="ok",
+        environment=settings.app_env,
+        provider=settings.llm_provider,
+        model=settings.llm_model,
+    )

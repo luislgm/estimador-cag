@@ -24,7 +24,10 @@ estimador-cag/
 │   ├── context/
 │   │   └── examples.py         # Estimaciones históricas (few-shot examples)
 │   ├── routers/
-│   │   └── estimations.py      # Endpoint POST /api/v1/estimate y schemas
+│   │   └── estimations.py      # Endpoint POST /api/v1/estimate
+│   ├── schemas/                # Contratos de datos (Pydantic) de request y response
+│   │   ├── estimation.py
+│   │   └── health.py
 │   └── services/
 │       └── llm_service.py      # Construcción del prompt y llamada al LLM
 ├── .env.example                # Plantilla de variables de entorno
@@ -117,7 +120,7 @@ FastAPI genera la documentación automáticamente:
 
 ### `POST /api/v1/estimate`
 
-Genera una estimación a partir de la transcripción de una reunión.
+Genera una estimación a partir de la transcripción de una reunión. La transcripción debe tener **al menos 50 caracteres** (sin contar espacios al principio y al final), para evitar llamadas inútiles al LLM.
 
 **Request:**
 
@@ -147,7 +150,7 @@ Genera una estimación a partir de la transcripción de una reunión.
 
 | Código | Motivo |
 |---|---|
-| `422` | Falta el campo `transcription` o está vacío |
+| `422` | Falta el campo `transcription` o tiene menos de 50 caracteres (no se llama al LLM) |
 | `502` | Error al llamar a la API del LLM (key inválida, límite de uso, etc.) |
 
 **Ejemplo con curl:**
