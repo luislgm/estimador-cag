@@ -36,6 +36,7 @@ def test_enabled_with_endpoint(monkeypatch):
         project_name="estimador-cag",
         batch=True,
         verbose=False,
+        set_global_tracer_provider=False,
     )
     instrumentor.return_value.instrument.assert_called_once_with(
         tracer_provider=register.return_value

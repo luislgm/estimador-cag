@@ -35,8 +35,14 @@ def setup_tracing(settings: Settings) -> bool:
         project_name=settings.phoenix_project_name,
         batch=True,  # envía las trazas en segundo plano, sin frenar las peticiones
         verbose=False,
+        # Sin proveedor global: otras librerías con trazas propias (FastAPI, por ejemplo)
+        # no envían nada a Phoenix, y no se llena de trazas de GET /health
+        set_global_tracer_provider=False,
     )
-    AnthropicInstrumentor().instrument(tracer_provider=tracer_provider)
+    # Solo se traza lo que se conecta aquí. Para otro proveedor de LLM, añadir su
+    # instrumentor, p. ej. OpenAIInstrumentor() de openinference-instrumentation-openai
+    for instrumentor in (AnthropicInstrumentor(),):
+        instrumentor.instrument(tracer_provider=tracer_provider)
     _enabled = True
     log.info(
         "tracing_enabled",
