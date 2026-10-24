@@ -2,6 +2,8 @@ from unittest.mock import AsyncMock, patch
 
 import anthropic
 import httpx
+import structlog
+from structlog.testing import capture_logs
 
 from app.services.llm_service import EstimationResult
 
@@ -89,3 +91,79 @@ def test_openapi_docs(client):
     assert client.get("/docs").status_code == 200
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/api/v1/estimate", "/health"} <= paths.keys()
+
+
+def test_estimate_includes_cost_and_finish_reason(client):
+    result = EstimationResult(
+        "## Estimación", "claude-haiku-4-5-20251001", 1_746, 706, "max_tokens"
+    )
+
+    with patch("app.routers.estimations.generate_estimation", AsyncMock(return_value=result)):
+        body = client.post("/api/v1/estimate", json={"transcription": TRANSCRIPTION}).json()
+
+    assert body["cost_usd"] == 0.005276
+    assert body["finish_reason"] == "max_tokens"
+
+
+def test_startup_logs_application_started():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    # setup_logging reconfigura structlog y anularía la captura: se simula
+    with patch("app.main.setup_logging") as setup, capture_logs() as logs, TestClient(app):
+        pass
+
+    setup.assert_called_once_with("DEBUG", "development")
+    events = [e["event"] for e in logs if e["log_level"] != "debug"]
+    assert events == ["application_started", "application_shutdown"]
+    assert next(e for e in logs if e["event"] == "application_started")["model"] == (
+        "claude-haiku-4-5"
+    )
+    assert any(e["event"] == "tracing_disabled" for e in logs)  # sin PHOENIX_COLLECTOR_ENDPOINT
+
+
+def test_request_id_is_generated_and_returned(client):
+    with capture_logs() as logs:
+        response = client.post("/api/v1/estimate", json={})
+
+    assert len(response.headers["X-Request-ID"]) == 12
+    completed = next(e for e in logs if e["event"] == "request_completed")
+    assert completed["status_code"] == 422
+    assert completed["log_level"] == "info"
+
+
+def test_request_id_from_client_is_reused(client):
+    response = client.get("/health", headers={"X-Request-ID": "mi-peticion-1"})
+
+    assert response.headers["X-Request-ID"] == "mi-peticion-1"
+
+
+def test_health_requests_are_logged_at_debug(client):
+    with capture_logs() as logs:
+        client.get("/health")
+
+    assert next(e for e in logs if e["event"] == "request_completed")["log_level"] == "debug"
+
+
+def test_request_id_is_added_to_llm_logs(client):
+    result = EstimationResult("## Estimación", "claude-haiku-4-5", 1, 1)
+
+    async def fake_generate(transcription):
+        structlog.get_logger().info("llm_call_completed")
+        return result
+
+    with (
+        patch("app.routers.estimations.generate_estimation", fake_generate),
+        capture_logs(processors=[structlog.contextvars.merge_contextvars]) as logs,
+    ):
+        response = client.post(
+            "/api/v1/estimate",
+            json={"transcription": TRANSCRIPTION},
+            headers={"X-Request-ID": "abc123"},
+        )
+
+    llm_log = next(e for e in logs if e["event"] == "llm_call_completed")
+    assert llm_log["request_id"] == "abc123"
+    assert llm_log["path"] == "/api/v1/estimate"
+    assert response.status_code == 200

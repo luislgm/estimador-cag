@@ -1,4 +1,5 @@
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -11,6 +12,8 @@ ENV_VARS = (
     "LLM_MODEL",
     "APP_ENV",
     "LOG_LEVEL",
+    "PHOENIX_COLLECTOR_ENDPOINT",
+    "PHOENIX_PROJECT_NAME",
 )
 
 
@@ -26,6 +29,14 @@ def test_env(monkeypatch, tmp_path):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def reset_structlog():
+    """Deja structlog y su contexto como estaban, aunque un test llame a setup_logging()."""
+    yield
+    structlog.reset_defaults()
+    structlog.contextvars.clear_contextvars()
 
 
 @pytest.fixture

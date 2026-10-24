@@ -5,4 +5,23 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Dentro de la red de Docker, Phoenix se alcanza por su nombre de servicio
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+    depends_on:
+      - phoenix
     restart: unless-stopped
+
+  # Trazas de las llamadas al LLM: panel web en http://localhost:6006
+  phoenix:
+    image: arizephoenix/phoenix:version-20.20.0
+    ports:
+      - "6006:6006"
+    volumes:
+      - phoenix_data:/mnt/data
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    restart: unless-stopped
+
+volumes:
+  phoenix_data:

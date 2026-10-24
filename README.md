@@ -63,7 +63,9 @@ cp .env.example .env
 | `LLM_PROVIDER` | Proveedor a utilizar: `openai` o `anthropic` | `openai` |
 | `LLM_MODEL` | Modelo a utilizar | `gpt-4o-mini` |
 | `APP_ENV` | Entorno de ejecución | `development` |
-| `LOG_LEVEL` | Nivel de logging | `DEBUG` |
+| `LOG_LEVEL` | Nivel de logging (structlog; en `production` los logs salen en JSON) | `DEBUG` |
+| `PHOENIX_COLLECTOR_ENDPOINT` | Endpoint de Arize Phoenix para las trazas del LLM (opcional) | Sin default (desactivado) |
+| `PHOENIX_PROJECT_NAME` | Proyecto de Phoenix donde se guardan las trazas | `estimador-cag` |
 
 Configuración usada en este proyecto:
 
@@ -108,6 +110,37 @@ docker run --rm -p 8000:8000 --env-file .env ghcr.io/luislgm/estimador-cag:lates
 
 > El `.env` nunca se copia dentro de la imagen (está en `.dockerignore`): la configuración se pasa al arrancar el contenedor.
 
+### Interfaz de chat (Streamlit)
+
+Además de la API, hay una interfaz de chat en [`streamlit_app.py`](streamlit_app.py) para pegar una transcripción y ver la estimación:
+
+```bash
+uv run --group ui streamlit run streamlit_app.py
+```
+
+Se abre en http://localhost:8501. La estimación se muestra **en streaming**, escribiéndose token a token con `st.write_stream`. El panel lateral muestra el **contexto CAG**: el system prompt activo, las estimaciones de ejemplo inyectadas y las métricas de la última llamada (modelo, tokens de entrada y salida, tiempo total y tiempo hasta el primer token). Usa el mismo servicio que el endpoint (mismo system prompt, ejemplos y `.env`), mantiene el historial durante la sesión y aplica la misma validación de 50 caracteres mínimos. Streamlit está en un grupo de dependencias aparte (`ui`) para no incluirlo en la imagen Docker de la API.
+
+## Logs
+
+Los logs son estructurados ([structlog](https://www.structlog.org/)): texto legible en desarrollo y una línea JSON por evento con `APP_ENV=production`.
+
+- Cada petición recibe un `request_id` que aparece en **todos** sus logs y se devuelve en la cabecera `X-Request-ID`. Si el cliente envía esa cabecera, se reutiliza su valor.
+- Cada llamada al LLM registra `llm_call_completed` con modelo, tokens, coste, `finish_reason` y latencia (o `llm_call_failed` si falla).
+- Las peticiones a `/health` se registran a nivel `debug` para no llenar el log con el healthcheck de Docker.
+
+```
+19:20:41 [info     ] request_completed   duration_ms=5 method=POST path=/api/v1/estimate request_id=prueba-1 status_code=422
+```
+
+## Trazas de las llamadas al LLM (Arize Phoenix)
+
+[Arize Phoenix](https://phoenix.arize.com/) guarda cada llamada a Claude con el **system prompt** (instrucciones + ejemplos CAG), la transcripción, la respuesta, los tokens y la latencia, y lo muestra en un panel web. Todo se ejecuta **en local**: los datos no salen de tu máquina.
+
+- `docker compose up -d` levanta Phoenix junto a la API. El panel está en http://localhost:6006 (proyecto `estimador-cag`).
+- Se activa con `PHOENIX_COLLECTOR_ENDPOINT` en el `.env` (`http://localhost:6006/v1/traces` para la API o Streamlit en local; dentro de Docker Compose la API usa `http://phoenix:6006/v1/traces`). **Si no está definida, no se activa nada** y la app funciona igual.
+- Cubre las dos vías: la API (`messages.create`) y el streaming de Streamlit (`messages.stream`).
+- La instrumentación ([`app/tracing.py`](app/tracing.py)) usa OpenInference y no requiere cambios en el servicio. Las trazas propias del SDK de Anthropic se desactivan (`open_telemetry=False`) para que no salgan duplicadas.
+
 ## Documentación de la API
 
 FastAPI genera la documentación automáticamente:
@@ -142,9 +175,14 @@ Genera una estimación a partir de la transcripción de una reunión. La transcr
     "output_tokens": 300,
     "total_tokens": 1500
   },
+  "cost_usd": 0.0027,
+  "finish_reason": "end_turn",
   "created_at": "2026-10-17T16:28:36Z"
 }
 ```
+
+- `cost_usd`: coste estimado según la tabla de precios de [`pricing.py`](app/services/pricing.py); `null` si el modelo no está en la tabla.
+- `finish_reason`: `end_turn` si la estimación terminó con normalidad; `max_tokens` si se cortó por el límite de tokens de salida.
 
 **Errores:**
 

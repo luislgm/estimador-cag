@@ -29,4 +29,12 @@ class EstimationResponse(BaseModel):
     model: str = Field(..., description="Modelo que ha generado la estimación")
     provider: str = Field(..., description="Proveedor del LLM")
     usage: TokenUsage = Field(..., description="Consumo de tokens de la llamada")
+    cost_usd: float | None = Field(
+        ..., description="Coste estimado en USD (null si el modelo no tiene precio configurado)"
+    )
+    finish_reason: str = Field(
+        ...,
+        description="Motivo de fin de la generación. 'max_tokens' indica estimación cortada",
+        examples=["end_turn"],
+    )
     created_at: datetime = Field(..., description="Fecha y hora de la estimación (UTC)")

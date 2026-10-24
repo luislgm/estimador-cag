@@ -28,5 +28,7 @@ async def estimate(request: EstimationRequest) -> EstimationResponse:
             output_tokens=result.output_tokens,
             total_tokens=result.input_tokens + result.output_tokens,
         ),
+        cost_usd=result.cost_usd,
+        finish_reason=result.finish_reason,
         created_at=datetime.now(UTC),
     )

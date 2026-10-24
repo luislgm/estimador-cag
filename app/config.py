@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "DEBUG"
 
+    # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
+    phoenix_collector_endpoint: str | None = None
+    phoenix_project_name: str = "estimador-cag"
+
     @model_validator(mode="after")
     def check_api_key_for_provider(self) -> "Settings":
         if self.llm_provider == "openai" and not self.openai_api_key:
