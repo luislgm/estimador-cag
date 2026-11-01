@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import app
+from app.services.cache import get_cache
 
 ENV_VARS = (
     "OPENAI_API_KEY",
@@ -14,6 +15,8 @@ ENV_VARS = (
     "LOG_LEVEL",
     "PHOENIX_COLLECTOR_ENDPOINT",
     "PHOENIX_PROJECT_NAME",
+    "REDIS_URL",
+    "CACHE_TTL",
 )
 
 
@@ -27,8 +30,10 @@ def test_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("LLM_MODEL", "claude-haiku-4-5")
     get_settings.cache_clear()
+    get_cache.cache_clear()
     yield
     get_settings.cache_clear()
+    get_cache.cache_clear()
 
 
 @pytest.fixture(autouse=True)

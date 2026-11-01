@@ -6,10 +6,14 @@ services:
       - "8000:8000"
     env_file: .env
     environment:
-      # Dentro de la red de Docker, Phoenix se alcanza por su nombre de servicio
+      # Dentro de la red de Docker, los servicios se alcanzan por su nombre
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      REDIS_URL: redis://redis:6379/0
     depends_on:
-      - phoenix
+      phoenix:
+        condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Trazas de las llamadas al LLM: panel web en http://localhost:6006
@@ -23,5 +27,22 @@ services:
       PHOENIX_WORKING_DIR: /mnt/data
     restart: unless-stopped
 
+  # Caché exact-match de respuestas del LLM (compartida por la API y Streamlit)
+  redis:
+    image: redis:7.4.10-alpine
+    # appendonly: guarda cada escritura en disco, así la caché sobrevive a los reinicios
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   phoenix_data:
+  redis_data:

@@ -21,8 +21,9 @@ estimador-cag/
 ├── app/
 │   ├── main.py                 # App FastAPI: router, /health y metadatos de Swagger
 │   ├── config.py               # Configuración con Pydantic BaseSettings (.env)
-│   ├── context/
-│   │   └── examples.py         # Estimaciones históricas (few-shot examples)
+│   ├── prompts/                # Plantillas de prompt versionadas (Jinja2)
+│   │   ├── loader.py           # render_estimation_prompt(request, version)
+│   │   └── estimation/v1/      # system.j2, user.j2 y examples.j2
 │   ├── routers/
 │   │   └── estimations.py      # Endpoint POST /api/v1/estimate
 │   ├── schemas/                # Contratos de datos (Pydantic) de request y response
@@ -30,10 +31,11 @@ estimador-cag/
 │   │   └── health.py
 │   ├── services/
 │   │   ├── llm_service.py      # Qué se pide: system prompt CAG + estimación
-│   │   └── llm_client.py       # Cómo se pide: wrapper sobre LiteLLM (OpenAI / Anthropic)
+│   │   ├── llm_client.py       # Cómo se pide: wrapper sobre LiteLLM (OpenAI / Anthropic)
+│   │   └── cache.py            # Caché exact-match en Redis
 │   ├── logging_config.py       # Logs estructurados (structlog)
 │   └── tracing.py              # Trazas del LLM en Arize Phoenix (opcional)
-├── streamlit_app.py            # Interfaz de chat
+├── streamlit_app.py            # Cliente Streamlit (formulario)
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
 ```
@@ -70,6 +72,9 @@ cp .env.example .env
 | `LOG_LEVEL` | Nivel de logging (structlog; en `production` los logs salen en JSON) | `DEBUG` |
 | `PHOENIX_COLLECTOR_ENDPOINT` | Endpoint de Arize Phoenix para las trazas del LLM (opcional) | Sin default (desactivado) |
 | `PHOENIX_PROJECT_NAME` | Proyecto de Phoenix donde se guardan las trazas | `estimador-cag` |
+| `REDIS_URL` | URL de Redis para la caché exact-match (opcional) | Sin default (desactivada) |
+| `CACHE_TTL` | Segundos que dura cada respuesta en la caché | `86400` (1 día) |
+| `ESTIMATOR_API_URL` | URL de la API que usa el cliente Streamlit | `http://127.0.0.1:8000` |
 
 Ejemplos de configuración:
 
@@ -127,15 +132,45 @@ docker run --rm -p 8000:8000 --env-file .env ghcr.io/luislgm/estimador-cag:lates
 
 > El `.env` nunca se copia dentro de la imagen (está en `.dockerignore`): la configuración se pasa al arrancar el contenedor.
 
-### Interfaz de chat (Streamlit)
+### Cliente Streamlit
 
-Además de la API, hay una interfaz de chat en [`streamlit_app.py`](streamlit_app.py) para pegar una transcripción y ver la estimación:
+Un formulario para pedir estimaciones al servicio IA, en [`streamlit_app.py`](streamlit_app.py). Con la API en marcha:
 
 ```bash
 uv run --group ui streamlit run streamlit_app.py
 ```
 
-Se abre en http://localhost:8501. La estimación se muestra **en streaming**, escribiéndose token a token con `st.write_stream`. El panel lateral muestra el **contexto CAG**: el system prompt activo, las estimaciones de ejemplo inyectadas y las métricas de la última llamada (modelo, tokens de entrada y salida, tiempo total y tiempo hasta el primer token). Usa el mismo servicio que el endpoint (mismo system prompt, ejemplos y `.env`), mantiene el historial durante la sesión y aplica la misma validación de 50 caracteres mínimos. Streamlit está en un grupo de dependencias aparte (`ui`) para no incluirlo en la imagen Docker de la API.
+Se abre en http://localhost:8501.
+
+- **Es un cliente de la API:** el formulario (`st.form`) construye un `EstimationRequest`, lo valida con el mismo schema de Pydantic que la API y lo envía a `POST /api/v1/estimate/stream`. Streamlit no llama al LLM ni necesita sus API keys; solo la URL de la API (`ESTIMATOR_API_URL`).
+- **Streaming:** la estimación se escribe en tiempo real con `st.write_stream`, a partir de los eventos SSE.
+- **Historial de la sesión:** la última estimación se muestra completa y las anteriores quedan plegadas debajo (con hora, título, tipo, detalle y formato), para comparar combinaciones. Se borra con "Nueva sesión" o al recargar la página.
+- **Panel lateral:** estado de la API (proveedor y modelo), métricas de la última llamada (tokens, tiempos, coste, si vino de la caché), los prompts (system y user) de la última estimación y las estimaciones de ejemplo (contexto CAG).
+- Streamlit está en un grupo de dependencias aparte (`ui`) para no incluirlo en la imagen Docker de la API.
+
+## Prompts versionados
+
+Los prompts son plantillas Jinja2 en [`app/prompts/`](app/prompts/), con la estructura `<caso_de_uso>/<versión>/<rol>.j2`:
+
+```
+app/prompts/
+├── loader.py
+└── estimation/
+    └── v1/
+        ├── system.j2     # rol, instrucciones y bloques condicionales; incluye examples.j2
+        ├── user.j2       # envuelve la descripción del proyecto
+        └── examples.j2   # 3 estimaciones de ejemplo (few-shot): el contexto CAG
+```
+
+- **`system.j2`**: rol del modelo e instrucciones generales, y **bloques condicionales** (`{% if %}`) según `project_type`, `output_format` y `detail_level`: solo se incluyen las instrucciones de las opciones elegidas. Añade los ejemplos con `{% include %}`.
+- **`user.j2`**: envuelve la descripción del proyecto en `<descripcion_proyecto>`.
+- **`examples.j2`**: tres proyectos inventados (app de fidelización, portal B2B y pipeline de datos), con el desglose de tareas, el total, el equipo y la duración. Sus horas y costes cuadran (hay un test que lo comprueba).
+
+Los tests de las plantillas están en [`tests/prompts/test_estimation_v1.py`](tests/prompts/test_estimation_v1.py): renderizan los prompts sin llamar a ningún modelo (milisegundos) y comprueban, entre otras cosas, que la descripción aparece literal en su bloque, que cada bloque condicional solo aparece con su opción y que los ejemplos cuadran.
+
+[`loader.py`](app/prompts/loader.py) expone `render_estimation_prompt(request, version="v1") -> tuple[str, str]`, que devuelve `(system, user)` listos para el modelo. Usa un `Environment` de Jinja2 con `StrictUndefined` (una variable que falte es un error, no un texto vacío), `trim_blocks=True` y `lstrip_blocks=True`.
+
+La versión activa es `PROMPT_VERSION` en `loader.py` y se devuelve en cada respuesta (`prompt_version`). Para probar un prompt nuevo: copiar `v1/` como `v2/`, editarlo y cambiar `PROMPT_VERSION`. Como la caché incluye el system prompt en su clave, cambiar de versión (o de opciones del formulario) no sirve respuestas antiguas.
 
 ## Logs
 
@@ -148,6 +183,18 @@ Los logs son estructurados ([structlog](https://www.structlog.org/)): texto legi
 ```
 19:20:41 [info     ] request_completed   duration_ms=5 method=POST path=/api/v1/estimate request_id=prueba-1 status_code=422
 ```
+
+## Caché exact-match (Redis)
+
+Si llega una petición **idéntica** a una anterior (mismo modelo, mismo system prompt, misma transcripción y mismo `max_tokens`), se devuelve la respuesta guardada **sin llamar al LLM**: gratis y en milisegundos.
+
+- `docker compose up -d` levanta Redis junto a la API, con persistencia en disco (volumen `redis_data`). La API y Streamlit **comparten la misma caché**.
+- Se activa con `REDIS_URL` (`redis://127.0.0.1:6379/0` fuera de Docker; dentro de Docker Compose la API usa `redis://redis:6379/0`). **Sin `REDIS_URL` no hay caché** y todo funciona igual.
+- La clave incluye el system prompt completo: si cambias el prompt o los ejemplos CAG, la caché se invalida sola.
+- En un acierto: `cache_hit=true` y `cost_usd=0` (no se ha gastado nada); los tokens son los de la respuesta original. En streaming, la respuesta guardada se entrega de una vez.
+- Las respuestas cortadas (`finish_reason=length`) **no se guardan**, para no volver a servirlas incompletas.
+- Si Redis no responde, la app sigue funcionando sin caché: espera como máximo 1 s, registra `cache_unavailable` y no vuelve a intentarlo durante 30 s.
+- Los aciertos se registran en los logs como `llm_cache_hit` (con `saved_usd`). En Phoenix no aparecen, porque no hay llamada al LLM.
 
 ## Trazas de las llamadas al LLM (Arize Phoenix)
 
@@ -170,51 +217,77 @@ FastAPI genera la documentación automáticamente:
 
 ### `POST /api/v1/estimate`
 
-Genera una estimación a partir de la transcripción de una reunión. La transcripción debe tener **al menos 50 caracteres** (sin contar espacios al principio y al final), para evitar llamadas inútiles al LLM.
+Genera una estimación y la devuelve completa en una sola respuesta JSON.
 
-**Request:**
+**Request** (`EstimationRequest`):
 
 ```json
 {
-  "transcription": "En la reunión con el cliente se discutió la necesidad de..."
+  "description": "Una clínica veterinaria quiere una web para pedir cita y ver el historial de vacunas.",
+  "project_type": "web_saas",
+  "detail_level": "summary",
+  "output_format": "phases_table"
 }
 ```
 
-**Response `200`:**
+| Campo | Valores |
+|---|---|
+| `description` | Entre 20 y 2.000 caracteres (sin contar espacios al principio y al final) |
+| `project_type` | `mobile_app`, `web_saas`, `internal_tool`, `data_pipeline` |
+| `detail_level` | `summary`, `medium`, `detailed` |
+| `output_format` | `phases_table`, `line_items`, `narrative` |
+
+**Response `200`** (`EstimationResponse`):
 
 ```json
 {
-  "estimation": "## Estimación: ...\n\n### Desglose de tareas:\n...",
+  "text": "## Estimación: ...
+
+| Fase | Semanas | Horas | Coste (€) |
+...",
+  "prompt_version": "v1",
   "model": "claude-haiku-4-5",
   "provider": "anthropic",
-  "usage": {
-    "input_tokens": 1200,
-    "output_tokens": 300,
-    "total_tokens": 1500
-  },
-  "cost_usd": 0.0027,
+  "usage": {"input_tokens": 1836, "output_tokens": 444, "total_tokens": 2280},
+  "cost_usd": 0.004056,
   "finish_reason": "stop",
-  "created_at": "2026-10-17T16:28:36Z"
+  "cache_hit": false,
+  "created_at": "2026-11-01T19:50:19Z"
 }
 ```
 
+- `text` y `prompt_version` son los campos del contrato. El resto son metadatos de la llamada que usa el cliente.
+- `prompt_version`: versión de la plantilla de prompt que generó la estimación (ver [Prompts versionados](#prompts-versionados)).
 - `cost_usd`: coste estimado según la tabla de precios de LiteLLM; `null` si el modelo no está en la tabla.
 - `finish_reason`: `stop` si la estimación terminó con normalidad; `length` si se cortó por el límite de tokens de salida.
+- `cache_hit`: `true` si la respuesta viene de la caché (sin llamada al LLM y con `cost_usd = 0`).
 
 **Errores:**
 
 | Código | Motivo |
 |---|---|
-| `422` | Falta el campo `transcription` o tiene menos de 50 caracteres (no se llama al LLM) |
+| `422` | Falta algún campo, la descripción no tiene entre 20 y 2.000 caracteres o un valor no es válido (no se llama al LLM) |
 | `502` | Error al llamar a la API del LLM (key inválida, límite de uso, etc.) |
 
-**Ejemplo con curl:**
+### `POST /api/v1/estimate/stream`
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/estimate \
-  -H "Content-Type: application/json" \
-  -d '{"transcription": "El cliente quiere una web para reservar mesas en su restaurante con pago online"}'
+El mismo request, pero la estimación llega **en streaming** como eventos [Server-Sent Events](https://developer.mozilla.org/es/docs/Web/API/Server-sent_events). Es el endpoint que usa Streamlit.
+
+| Evento | Datos | Cuándo |
+|---|---|---|
+| `token` | `{"text": "..."}` | Cada trozo de texto, según lo genera el LLM |
+| `done` | La respuesta completa, igual que en `POST /api/v1/estimate` | Al terminar |
+| `error` | `{"message": "..."}` | Si falla la llamada al LLM (no llega `done`) |
+
 ```
+event: token
+data: {"text": "## Estimación: Plataforma"}
+
+event: done
+data: {"text": "## Estimación: ...", "prompt_version": "v1", "usage": {...}, ...}
+```
+
+Los errores de validación devuelven `422` igual que el endpoint normal, antes de empezar el stream.
 
 ### `GET /health`
 
@@ -252,9 +325,6 @@ El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en
 
 ## Ejemplos de contexto
 
-Las estimaciones históricas están en [`app/context/examples.py`](app/context/examples.py). Cada ejemplo incluye:
+Las estimaciones de ejemplo (el contexto CAG) están en [`app/prompts/estimation/v1/examples.j2`](app/prompts/estimation/v1/examples.j2). Cada ejemplo incluye la descripción del proyecto y su estimación: desglose de tareas con horas y costes (tarifa de 50 €/h), equipo recomendado y duración.
 
-- `meeting_summary`: resumen de lo que pedía el cliente.
-- `estimation`: desglose de tareas con horas y costes (tarifa de 50 €/h), equipo recomendado y duración.
-
-Los datos son ficticios. Para mejorar la calidad de las estimaciones, sustitúyelos por proyectos reales y representativos del tipo de trabajo que se quiere estimar.
+Los datos son ficticios. Para mejorar la calidad de las estimaciones, sustitúyelos por proyectos reales y representativos del tipo de trabajo que se quiere estimar (en una versión nueva, `v2/`, para poder comparar).

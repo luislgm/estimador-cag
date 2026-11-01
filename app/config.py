@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "DEBUG"
 
+    # Caché exact-match de respuestas del LLM en Redis (opcional: sin URL no se activa)
+    redis_url: str | None = None
+    cache_ttl: int = 86400  # segundos que dura cada respuesta en la caché (1 día)
+
     # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
     phoenix_collector_endpoint: str | None = None
     phoenix_project_name: str = "estimador-cag"

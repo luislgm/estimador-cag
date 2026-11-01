@@ -13,13 +13,14 @@ os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 import time  # noqa: E402
 from collections.abc import Iterator  # noqa: E402
-from dataclasses import dataclass  # noqa: E402
+from dataclasses import asdict, dataclass, replace  # noqa: E402
 
 import litellm  # noqa: E402
 import openai  # noqa: E402
 import structlog  # noqa: E402
 
 from app.config import Settings, get_settings  # noqa: E402
+from app.services.cache import EstimationCache, get_cache  # noqa: E402
 
 litellm.suppress_debug_info = True
 
@@ -39,6 +40,7 @@ class LLMResult:
     output_tokens: int
     finish_reason: str  # normalizado por LiteLLM: "stop", "length", "content_filter"...
     cost_usd: float | None
+    cache_hit: bool = False
 
     @property
     def truncated(self) -> bool:
@@ -125,9 +127,44 @@ def _failed(error: Exception, mode: str, started: float) -> LLMError:
     return LLMError(str(error))
 
 
+def _cache_key(params: dict) -> str:
+    system, user = (m["content"] for m in params["messages"])
+    return EstimationCache.make_key(
+        model=params["model"], system=system, user=user, max_tokens=params["max_tokens"]
+    )
+
+
+def _from_cache(params: dict, mode: str) -> LLMResult | None:
+    """Respuesta guardada para esta misma petición, o None si no hay (o no hay caché)."""
+    cache = get_cache()
+    if cache is None or (cached := cache.get(_cache_key(params))) is None:
+        return None
+    original = LLMResult(**cached)
+    log.info(
+        "llm_cache_hit",
+        mode=mode,
+        provider=original.provider,
+        model=original.model,
+        input_tokens=original.input_tokens,
+        output_tokens=original.output_tokens,
+        saved_usd=original.cost_usd,
+    )
+    # No se ha llamado al LLM: no hay coste. Los tokens se conservan como información.
+    return replace(original, cost_usd=0.0, cache_hit=True)
+
+
+def _save_to_cache(params: dict, result: LLMResult) -> None:
+    cache = get_cache()
+    # Una respuesta cortada no se guarda: se volvería a servir incompleta
+    if cache is not None and not result.truncated:
+        cache.set(_cache_key(params), asdict(result) | {"cache_hit": False})
+
+
 async def acomplete(system: str, user: str, max_tokens: int) -> LLMResult:
     """Llamada completa (sin streaming): espera a la respuesta entera."""
     params = _call_params(system, user, max_tokens)
+    if cached := _from_cache(params, "blocking"):
+        return cached
     log.debug("llm_call_started", mode="blocking", model=params["model"])
     started = time.perf_counter()
     try:
@@ -139,6 +176,7 @@ async def acomplete(system: str, user: str, max_tokens: int) -> LLMResult:
         choice.message.content or "", response.model, response.usage, choice.finish_reason
     )
     _log_completed(result, "blocking", started)
+    _save_to_cache(params, result)
     return result
 
 
@@ -156,6 +194,11 @@ class CompletionStream:
         self.result: LLMResult | None = None
 
     def __iter__(self) -> Iterator[str]:
+        if cached := _from_cache(self.params, "stream"):
+            # Respuesta ya conocida: se entrega entera de una vez, sin llamar al LLM
+            self.result = cached
+            yield cached.text
+            return
         log.debug("llm_call_started", mode="stream", model=self.params["model"])
         started = time.perf_counter()
         parts: list[str] = []
@@ -173,3 +216,4 @@ class CompletionStream:
             raise _failed(e, "stream", started) from e
         self.result = _to_result("".join(parts), model, usage, finish_reason)
         _log_completed(self.result, "stream", started)
+        _save_to_cache(self.params, self.result)

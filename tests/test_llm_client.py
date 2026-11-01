@@ -1,12 +1,15 @@
 from unittest.mock import AsyncMock, patch
 
+import fakeredis
 import httpx
 import litellm
 import pytest
+import redis
 from structlog.testing import capture_logs
 
 from app.config import Settings
 from app.services import llm_client
+from app.services.cache import EstimationCache
 
 REAL_ACOMPLETION = litellm.acompletion
 REAL_COMPLETION = litellm.completion
@@ -158,3 +161,106 @@ def test_stream_wraps_provider_errors():
 
 def test_unknown_model_has_no_cost():
     assert llm_client._cost_usd("anthropic/modelo-inventado", 100, 100) is None
+
+
+# --- Caché exact-match ---
+
+
+@pytest.fixture
+def cache():
+    """Caché con un Redis simulado en memoria, conectada al wrapper."""
+    instance = EstimationCache(fakeredis.FakeRedis(decode_responses=True), ttl=60)
+    with patch.object(llm_client, "get_cache", return_value=instance):
+        yield instance
+
+
+async def test_cache_miss_then_hit(cache):
+    fake = mocked(REAL_ACOMPLETION)
+    with patch.object(litellm, "acompletion", fake), capture_logs() as logs:
+        first = await llm_client.acomplete("system", "transcripción", 4096)
+        second = await llm_client.acomplete("system", "transcripción", 4096)
+
+    assert len(fake.calls) == 1  # la segunda no llega al proveedor
+    assert not first.cache_hit and first.cost_usd > 0
+    assert second.cache_hit
+    assert second.cost_usd == 0.0  # no se ha gastado nada
+    assert second.text == first.text
+    assert (second.input_tokens, second.output_tokens) == (first.input_tokens, first.output_tokens)
+    hit = next(e for e in logs if e["event"] == "llm_cache_hit")
+    assert hit["saved_usd"] == first.cost_usd
+
+
+async def test_different_transcription_is_not_a_hit(cache):
+    fake = mocked(REAL_ACOMPLETION)
+    with patch.object(litellm, "acompletion", fake):
+        await llm_client.acomplete("system", "transcripción A", 4096)
+        result = await llm_client.acomplete("system", "transcripción B", 4096)
+
+    assert len(fake.calls) == 2
+    assert not result.cache_hit
+
+
+def test_stream_hit_returns_full_text_at_once(cache):
+    fake = mocked(REAL_COMPLETION, text="uno dos tres cuatro")
+    with patch.object(litellm, "completion", fake):
+        first = llm_client.CompletionStream("system", "transcripción", 4096)
+        first_chunks = list(first)
+        second = llm_client.CompletionStream("system", "transcripción", 4096)
+        second_chunks = list(second)
+
+    assert len(fake.calls) == 1
+    assert len(first_chunks) > 1
+    assert second_chunks == ["uno dos tres cuatro"]  # de una vez, sin llamar al LLM
+    assert second.result.cache_hit and second.result.cost_usd == 0.0
+    assert second.result.output_tokens == first.result.output_tokens  # tokens reales guardados
+
+
+async def test_cache_is_shared_between_stream_and_blocking(cache):
+    stream_fake = mocked(REAL_COMPLETION, text="estimación compartida")
+    with patch.object(litellm, "completion", stream_fake):
+        stream = llm_client.CompletionStream("system", "transcripción", 4096)
+        list(stream)
+
+    blocking_fake = mocked(REAL_ACOMPLETION)
+    with patch.object(litellm, "acompletion", blocking_fake):
+        result = await llm_client.acomplete("system", "transcripción", 4096)
+
+    assert blocking_fake.calls == []
+    assert result.cache_hit
+    assert result.text == "estimación compartida"
+    assert result.input_tokens == stream.result.input_tokens > 0  # no se guardan tokens a 0
+
+
+async def test_truncated_responses_are_not_cached(cache):
+    response = litellm.ModelResponse(
+        model="claude-haiku-4-5",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "cort"},
+                "finish_reason": "length",
+            }
+        ],
+        usage={"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20},
+    )
+    acompletion = AsyncMock(return_value=response)
+    with patch.object(litellm, "acompletion", acompletion):
+        await llm_client.acomplete("system", "transcripción", 4096)
+        second = await llm_client.acomplete("system", "transcripción", 4096)
+
+    assert acompletion.await_count == 2
+    assert not second.cache_hit
+
+
+async def test_works_when_redis_is_down(cache):
+    error = redis.ConnectionError("Redis no responde")
+    fake = mocked(REAL_ACOMPLETION)
+    with (
+        patch.object(cache.client, "get", side_effect=error),
+        patch.object(cache.client, "set", side_effect=error),
+        patch.object(litellm, "acompletion", fake),
+    ):
+        result = await llm_client.acomplete("system", "transcripción", 4096)
+
+    assert result.text == "## Estimación: Test"
+    assert not result.cache_hit

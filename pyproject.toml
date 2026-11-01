@@ -7,10 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "arize-phoenix-otel>=0.17.2",
     "fastapi>=0.143.3",
+    "jinja2>=3.1.6",
     "litellm>=1.106.6",
     "openinference-instrumentation-litellm>=0.1.52",
     "pydantic-settings>=2.16.0",
     "python-dotenv>=1.2.4",
+    "redis>=8.1.0",
     "structlog>=26.1.0",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -27,6 +29,7 @@ package = false
 
 [dependency-groups]
 dev = [
+    "fakeredis>=2.40.0",
     "httpx>=0.28.1",
     "httpx2>=2.16.0",
     "pytest>=9.1.1",
@@ -62,3 +65,4 @@ select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/context/examples.py" = ["E501"]  # texto del prompt, no se parte
+"app/schemas/estimation.py" = ["UP042"]  # enums (str, Enum) como pide el contrato del curso
