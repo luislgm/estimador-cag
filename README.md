@@ -28,8 +28,12 @@ estimador-cag/
 │   ├── schemas/                # Contratos de datos (Pydantic) de request y response
 │   │   ├── estimation.py
 │   │   └── health.py
-│   └── services/
-│       └── llm_service.py      # Construcción del prompt y llamada al LLM
+│   ├── services/
+│   │   ├── llm_service.py      # Qué se pide: system prompt CAG + estimación
+│   │   └── llm_client.py       # Cómo se pide: wrapper sobre LiteLLM (OpenAI / Anthropic)
+│   ├── logging_config.py       # Logs estructurados (structlog)
+│   └── tracing.py              # Trazas del LLM en Arize Phoenix (opcional)
+├── streamlit_app.py            # Interfaz de chat
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
 ```
@@ -38,7 +42,7 @@ estimador-cag/
 
 - Python 3.11 o superior
 - [uv](https://docs.astral.sh/uv/)
-- Una API key de [Anthropic](https://console.anthropic.com/)
+- Una API key de [Anthropic](https://console.anthropic.com/) o de [OpenAI](https://platform.openai.com/)
 
 ## Instalación
 
@@ -67,17 +71,30 @@ cp .env.example .env
 | `PHOENIX_COLLECTOR_ENDPOINT` | Endpoint de Arize Phoenix para las trazas del LLM (opcional) | Sin default (desactivado) |
 | `PHOENIX_PROJECT_NAME` | Proyecto de Phoenix donde se guardan las trazas | `estimador-cag` |
 
-Configuración usada en este proyecto:
+Ejemplos de configuración:
 
 ```env
+# Anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 LLM_PROVIDER=anthropic
 LLM_MODEL=claude-haiku-4-5
+
+# OpenAI
+OPENAI_API_KEY=sk-...
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
 ```
 
 > La aplicación valida al arrancar que exista la API key del proveedor elegido. Si falta, falla con un error claro.
->
-> Actualmente el servicio LLM solo implementa la llamada a **Anthropic**.
+
+### Proveedores de LLM (LiteLLM)
+
+Las llamadas al LLM pasan por [`app/services/llm_client.py`](app/services/llm_client.py), un wrapper sobre [LiteLLM](https://docs.litellm.ai/) que ofrece la misma interfaz para OpenAI y Anthropic. Para cambiar de proveedor basta con cambiar `LLM_PROVIDER` y `LLM_MODEL`: el resto del código no cambia.
+
+- El modelo se envía a LiteLLM como `<proveedor>/<modelo>` (p. ej. `anthropic/claude-haiku-4-5`).
+- Los tokens, el coste (tabla de precios de LiteLLM) y el motivo de fin (`stop` / `length`) salen igual para ambos proveedores, también en streaming.
+- Los errores de cualquier proveedor se convierten en `LLMError`, que la API devuelve como `502`.
+- La tabla de precios es la que trae el paquete de LiteLLM (`LITELLM_LOCAL_MODEL_COST_MAP=True`): se actualiza al actualizar LiteLLM.
 
 ## Ejecución
 
@@ -138,8 +155,8 @@ Los logs son estructurados ([structlog](https://www.structlog.org/)): texto legi
 
 - `docker compose up -d` levanta Phoenix junto a la API. El panel está en http://localhost:6006 (proyecto `estimador-cag`).
 - Se activa con `PHOENIX_COLLECTOR_ENDPOINT` en el `.env` (`http://localhost:6006/v1/traces` para la API o Streamlit en local; dentro de Docker Compose la API usa `http://phoenix:6006/v1/traces`). **Si no está definida, no se activa nada** y la app funciona igual.
-- Cubre las dos vías: la API (`messages.create`) y el streaming de Streamlit (`messages.stream`).
-- La instrumentación ([`app/tracing.py`](app/tracing.py)) usa OpenInference y no requiere cambios en el servicio. Las trazas propias del SDK de Anthropic se desactivan (`open_telemetry=False`) para que no salgan duplicadas.
+- Cubre las dos vías (la API y el streaming de Streamlit) y los dos proveedores, porque instrumenta LiteLLM.
+- La instrumentación ([`app/tracing.py`](app/tracing.py)) usa OpenInference y no requiere cambios en el servicio.
 
 ## Documentación de la API
 
@@ -176,13 +193,13 @@ Genera una estimación a partir de la transcripción de una reunión. La transcr
     "total_tokens": 1500
   },
   "cost_usd": 0.0027,
-  "finish_reason": "end_turn",
+  "finish_reason": "stop",
   "created_at": "2026-10-17T16:28:36Z"
 }
 ```
 
-- `cost_usd`: coste estimado según la tabla de precios de [`pricing.py`](app/services/pricing.py); `null` si el modelo no está en la tabla.
-- `finish_reason`: `end_turn` si la estimación terminó con normalidad; `max_tokens` si se cortó por el límite de tokens de salida.
+- `cost_usd`: coste estimado según la tabla de precios de LiteLLM; `null` si el modelo no está en la tabla.
+- `finish_reason`: `stop` si la estimación terminó con normalidad; `length` si se cortó por el límite de tokens de salida.
 
 **Errores:**
 

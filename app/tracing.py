@@ -1,13 +1,13 @@
 """Trazas de las llamadas al LLM con Arize Phoenix (OpenTelemetry + OpenInference).
 
 Es opcional: solo se activa si PHOENIX_COLLECTOR_ENDPOINT está configurado. Al activarse,
-cada llamada al SDK de Anthropic (messages.create y messages.stream) se envía a Phoenix con
-el system prompt, la transcripción, la respuesta, los tokens y la latencia. No hace falta
-tocar el código del servicio: la instrumentación envuelve el SDK automáticamente.
+cada llamada a LiteLLM (completion y acompletion, sea cual sea el proveedor) se envía a
+Phoenix con el system prompt, la transcripción, la respuesta, los tokens y la latencia. No
+hace falta tocar el código del servicio: la instrumentación envuelve LiteLLM automáticamente.
 """
 
 import structlog
-from openinference.instrumentation.anthropic import AnthropicInstrumentor
+from openinference.instrumentation.litellm import LiteLLMInstrumentor
 from phoenix.otel import register
 
 from app.config import Settings
@@ -39,9 +39,9 @@ def setup_tracing(settings: Settings) -> bool:
         # no envían nada a Phoenix, y no se llena de trazas de GET /health
         set_global_tracer_provider=False,
     )
-    # Solo se traza lo que se conecta aquí. Para otro proveedor de LLM, añadir su
-    # instrumentor, p. ej. OpenAIInstrumentor() de openinference-instrumentation-openai
-    for instrumentor in (AnthropicInstrumentor(),):
+    # Solo se traza lo que se conecta aquí. Todas las llamadas al LLM pasan por LiteLLM,
+    # así que este instrumentor cubre OpenAI y Anthropic por igual
+    for instrumentor in (LiteLLMInstrumentor(),):
         instrumentor.instrument(tracer_provider=tracer_provider)
     _enabled = True
     log.info(

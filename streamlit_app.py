@@ -9,7 +9,6 @@ Ejecutar con:  uv run --group ui streamlit run streamlit_app.py
 import time
 from collections.abc import Iterator
 
-import anthropic
 import streamlit as st
 from pydantic import ValidationError
 
@@ -17,7 +16,7 @@ from app.config import get_settings
 from app.context.examples import ESTIMATION_EXAMPLES
 from app.logging_config import setup_logging
 from app.schemas.estimation import EstimationRequest
-from app.services.llm_service import EstimationStream, build_system_prompt
+from app.services.llm_service import EstimationStream, LLMError, build_system_prompt
 from app.tracing import setup_tracing
 
 st.set_page_config(page_title="Estimador CAG", page_icon="📋")
@@ -54,9 +53,9 @@ def fmt_cost(value: float | None) -> str:
 
 
 FINISH_REASON_LABELS = {
-    "end_turn": "Completa",
-    "max_tokens": "Cortada",
-    "refusal": "Rechazada",
+    "stop": "Completa",
+    "length": "Cortada",
+    "content_filter": "Rechazada",
 }
 
 
@@ -146,7 +145,7 @@ def answer(prompt: str) -> None:
     timings: dict = {}
     try:
         st.write_stream(timed(stream, timings))
-    except anthropic.APIError as e:
+    except LLMError as e:
         reply = f"Error al llamar al LLM: {e}"
         st.error(reply)
         st.session_state.messages.append({"role": "assistant", "content": reply})

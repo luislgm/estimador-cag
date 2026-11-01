@@ -1,11 +1,9 @@
 from unittest.mock import AsyncMock, patch
 
-import anthropic
-import httpx
 import structlog
 from structlog.testing import capture_logs
 
-from app.services.llm_service import EstimationResult
+from app.services.llm_service import EstimationResult, LLMError
 
 TRANSCRIPTION = (
     "El cliente quiere una web para reservar mesas en su restaurante, "
@@ -76,9 +74,7 @@ def test_estimate_strips_transcription(client):
 
 
 def test_estimate_returns_502_when_llm_fails(client):
-    error = anthropic.APIConnectionError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    )
+    error = LLMError("conexión rechazada")
 
     with patch("app.routers.estimations.generate_estimation", AsyncMock(side_effect=error)):
         response = client.post("/api/v1/estimate", json={"transcription": TRANSCRIPTION})
@@ -95,14 +91,14 @@ def test_openapi_docs(client):
 
 def test_estimate_includes_cost_and_finish_reason(client):
     result = EstimationResult(
-        "## Estimación", "claude-haiku-4-5-20251001", 1_746, 706, "max_tokens"
+        "## Estimación", "claude-haiku-4-5-20251001", 1_746, 706, "length", 0.005276
     )
 
     with patch("app.routers.estimations.generate_estimation", AsyncMock(return_value=result)):
         body = client.post("/api/v1/estimate", json={"transcription": TRANSCRIPTION}).json()
 
     assert body["cost_usd"] == 0.005276
-    assert body["finish_reason"] == "max_tokens"
+    assert body["finish_reason"] == "length"
 
 
 def test_startup_logs_application_started():

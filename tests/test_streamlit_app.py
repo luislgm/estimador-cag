@@ -1,14 +1,12 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import anthropic
-import httpx
 import pytest
 
 pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
-from app.services.llm_service import EstimationResult  # noqa: E402
+from app.services.llm_service import EstimationResult, LLMError  # noqa: E402
 
 APP_FILE = str(Path(__file__).parent.parent / "streamlit_app.py")
 TRANSCRIPTION = (
@@ -23,7 +21,7 @@ class FakeStream:
 
     calls: list[str] = []
     error: Exception | None = None
-    finish_reason: str = "end_turn"
+    finish_reason: str = "stop"
 
     def __init__(self, transcription: str):
         FakeStream.calls.append(transcription)
@@ -34,7 +32,7 @@ class FakeStream:
             raise FakeStream.error
         yield from CHUNKS
         self.result = EstimationResult(
-            "".join(CHUNKS), "claude-haiku-4-5", 1200, 300, FakeStream.finish_reason
+            "".join(CHUNKS), "claude-haiku-4-5", 1200, 300, FakeStream.finish_reason, 0.0027
         )
 
 
@@ -42,7 +40,7 @@ class FakeStream:
 def fake_stream():
     FakeStream.calls = []
     FakeStream.error = None
-    FakeStream.finish_reason = "end_turn"
+    FakeStream.finish_reason = "stop"
     with patch("app.services.llm_service.EstimationStream", FakeStream):
         yield FakeStream
 
@@ -90,9 +88,7 @@ def test_short_transcription_does_not_call_llm(fake_stream):
 
 
 def test_llm_error_is_shown(fake_stream):
-    fake_stream.error = anthropic.APIConnectionError(
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    )
+    fake_stream.error = LLMError("conexión rechazada")
 
     at = send(run_app(), TRANSCRIPTION)
 
@@ -152,7 +148,7 @@ def test_shows_cost_in_metrics_and_caption():
 
 
 def test_warns_when_estimation_is_truncated(fake_stream):
-    fake_stream.finish_reason = "max_tokens"
+    fake_stream.finish_reason = "length"
 
     at = send(run_app(), TRANSCRIPTION)
 

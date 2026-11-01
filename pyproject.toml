@@ -5,10 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=1.15.0",
     "arize-phoenix-otel>=0.17.2",
     "fastapi>=0.143.3",
-    "openinference-instrumentation-anthropic>=3.1.0",
+    "litellm>=1.106.6",
+    "openinference-instrumentation-litellm>=0.1.52",
     "pydantic-settings>=2.16.0",
     "python-dotenv>=1.2.4",
     "structlog>=26.1.0",
@@ -28,6 +28,7 @@ package = false
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
@@ -40,6 +41,10 @@ ui = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # Aviso interno de LiteLLM (tipos TypedDict con ReadOnly); no afecta al proyecto
+    "ignore:Item .* is using the `ReadOnly` qualifier:UserWarning",
+]
 
 [tool.coverage.run]
 source = ["app"]

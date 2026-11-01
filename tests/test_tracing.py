@@ -14,7 +14,7 @@ def reset_tracing(monkeypatch):
 def test_disabled_without_endpoint():
     with (
         patch.object(tracing, "register") as register,
-        patch.object(tracing, "AnthropicInstrumentor") as instrumentor,
+        patch.object(tracing, "LiteLLMInstrumentor") as instrumentor,
     ):
         assert tracing.setup_tracing(Settings()) is False
 
@@ -27,7 +27,7 @@ def test_enabled_with_endpoint(monkeypatch):
 
     with (
         patch.object(tracing, "register") as register,
-        patch.object(tracing, "AnthropicInstrumentor") as instrumentor,
+        patch.object(tracing, "LiteLLMInstrumentor") as instrumentor,
     ):
         assert tracing.setup_tracing(Settings()) is True
 
@@ -49,7 +49,7 @@ def test_is_idempotent(monkeypatch):
 
     with (
         patch.object(tracing, "register") as register,
-        patch.object(tracing, "AnthropicInstrumentor") as instrumentor,
+        patch.object(tracing, "LiteLLMInstrumentor") as instrumentor,
     ):
         assert tracing.setup_tracing(Settings()) is True
         assert tracing.setup_tracing(Settings()) is True
@@ -64,7 +64,7 @@ def test_custom_project_name(monkeypatch):
 
     with (
         patch.object(tracing, "register") as register,
-        patch.object(tracing, "AnthropicInstrumentor"),
+        patch.object(tracing, "LiteLLMInstrumentor"),
     ):
         tracing.setup_tracing(Settings())
 

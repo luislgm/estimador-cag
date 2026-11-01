@@ -1,11 +1,10 @@
 from datetime import UTC, datetime
 
-import anthropic
 from fastapi import APIRouter, HTTPException
 
 from app.config import get_settings
 from app.schemas.estimation import EstimationRequest, EstimationResponse, TokenUsage
-from app.services.llm_service import generate_estimation
+from app.services.llm_service import LLMError, generate_estimation
 
 router = APIRouter(tags=["estimations"])
 
@@ -16,7 +15,7 @@ async def estimate(request: EstimationRequest) -> EstimationResponse:
 
     try:
         result = await generate_estimation(request.transcription)
-    except anthropic.APIError as e:
+    except LLMError as e:
         raise HTTPException(status_code=502, detail=f"Error al llamar al LLM: {e}") from e
 
     return EstimationResponse(

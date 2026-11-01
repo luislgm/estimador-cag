@@ -69,9 +69,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - name: Exportar dependencias del lockfile
-        run: uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt
+        # Todos los grupos: también las de desarrollo y la interfaz (Streamlit)
+        run: uv export --locked --all-groups --no-emit-project --format requirements-txt -o requirements.txt
       - name: pip-audit (vulnerabilidades conocidas)
-        run: uvx pip-audit -r requirements.txt --require-hashes --disable-pip
+        # Avisos ignorados temporalmente: filelock 3.x (corregidos en 4.2.1). LiteLLM exige
+        # filelock<4, así que no se puede actualizar. Son todos de ataque local (manipular los
+        # archivos de bloqueo en el disco, que requiere acceso previo a la máquina).
+        # Quitar estas excepciones cuando LiteLLM acepte filelock>=4.2.1.
+        run: >-
+          uvx pip-audit -r requirements.txt --require-hashes --disable-pip
+          --ignore-vuln CVE-2026-112907 --ignore-vuln CVE-2026-112908
+          --ignore-vuln CVE-2026-112909 --ignore-vuln CVE-2026-112910
+          --ignore-vuln CVE-2026-112911 --ignore-vuln CVE-2026-112912
+          --ignore-vuln CVE-2026-112913 --ignore-vuln CVE-2026-112915
+          --ignore-vuln CVE-2026-112935 --ignore-vuln CVE-2026-112936
+          --ignore-vuln CVE-2026-112938 --ignore-vuln CVE-2026-112939
+          --ignore-vuln CVE-2026-112940
 
   docker:
     name: Imagen Docker

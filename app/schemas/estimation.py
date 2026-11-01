@@ -34,7 +34,7 @@ class EstimationResponse(BaseModel):
     )
     finish_reason: str = Field(
         ...,
-        description="Motivo de fin de la generación. 'max_tokens' indica estimación cortada",
-        examples=["end_turn"],
+        description="Motivo de fin de la generación. 'length' indica estimación cortada",
+        examples=["stop"],
     )
     created_at: datetime = Field(..., description="Fecha y hora de la estimación (UTC)")
