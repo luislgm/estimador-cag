@@ -51,7 +51,9 @@ class EstimationCache:
             sort_keys=True,
             ensure_ascii=False,
         )
-        return "estimation:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        # "structured": las entradas guardan el resultado estructurado (las antiguas, de texto
+        # libre, tenían otro prefijo y caducan solas)
+        return "estimation:structured:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> dict | None:
         if not self._available():

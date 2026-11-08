@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,9 +27,17 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "DEBUG"
 
+    # Guardrail de moderación (API de OpenAI). Necesita OPENAI_API_KEY aunque el LLM sea otro
+    moderation_enabled: bool = False
+
     # Caché exact-match de respuestas del LLM en Redis (opcional: sin URL no se activa)
     redis_url: str | None = None
     cache_ttl: int = 86400  # segundos que dura cada respuesta en la caché (1 día)
+
+    # Caché semántica (Redis Stack + embeddings de OpenAI). off | log_only | on
+    semantic_cache_mode: Literal["off", "log_only", "on"] = "off"
+    semantic_cache_threshold: float = Field(default=0.95, ge=0, le=1)
+    embedding_model: str = "openai/text-embedding-3-small"
 
     # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
     phoenix_collector_endpoint: str | None = None

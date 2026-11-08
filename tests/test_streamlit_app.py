@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +9,8 @@ import streamlit as st  # noqa: E402
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from app.schemas.estimation import DetailLevel, OutputFormat, ProjectType  # noqa: E402
+from app.services.render import render_markdown  # noqa: E402
+from tests.factories import make_phase, make_request, make_result  # noqa: E402
 
 APP_FILE = str(Path(__file__).parent.parent / "streamlit_app.py")
 DESCRIPTION = (
@@ -24,73 +25,42 @@ HEALTH = {
 }
 
 
-def done_payload(text, **changes):
+def api_response(result=None, **changes):
+    result = result or make_result(project_name="App autoescuelas")
     return {
-        "text": text,
+        "text": render_markdown(result, make_request()),
         "prompt_version": "v1",
+        "result": result.model_dump(mode="json"),
         "model": "claude-haiku-4-5",
         "provider": "anthropic",
-        "usage": {"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500},
-        "cost_usd": 0.0027,
-        "finish_reason": "stop",
+        "usage": {"input_tokens": 3500, "output_tokens": 1200, "total_tokens": 4700},
+        "cost_usd": 0.0095,
+        "finish_reason": "tool_calls",
         "cache_hit": False,
-        "created_at": "2026-11-01T10:00:00Z",
+        "created_at": "2026-11-07T10:00:00Z",
     } | changes
 
 
-def sse_lines(events):
-    for event, data in events:
-        yield f"event: {event}"
-        yield f"data: {json.dumps(data, ensure_ascii=False)}"
-        yield ""
-
-
 class FakeApi:
-    """Simula la API: health y el endpoint de streaming (SSE)."""
+    """Simula la API: GET /health y POST /api/v1/estimate."""
 
     def __init__(self):
         self.requests = []
         self.health = HEALTH
         self.status_code = 200
-        self.events = None  # por defecto, una estimación correcta en dos trozos
+        self.body = api_response()
         self.connection_error = False
-
-    def estimation(self, title="App autoescuelas", **done_changes):
-        text = f"## Estimación: {title}\n\n1. Diseño: 20 horas"
-        return [
-            ("token", {"text": f"## Estimación: {title}"}),
-            ("token", {"text": "\n\n1. Diseño: 20 horas"}),
-            ("done", done_payload(text, **done_changes)),
-        ]
 
     def get(self, url, **kwargs):
         if self.health is None:
             raise httpx.ConnectError("API caída")
         return httpx.Response(200, json=self.health)
 
-    def stream(self, method, url, json=None, **kwargs):
+    def post(self, url, json=None, **kwargs):
         if self.connection_error:
             raise httpx.ConnectError("API caída")
-        self.requests.append((method, url, json))
-        api = self
-
-        class Response:
-            status_code = api.status_code
-            text = '{"detail": "error de validación"}'
-
-            def read(self):
-                pass
-
-            def iter_lines(self):
-                yield from sse_lines(api.events or api.estimation())
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-        return Response()
+        self.requests.append((url, json))
+        return httpx.Response(self.status_code, json=self.body)
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +68,7 @@ def api(monkeypatch):
     monkeypatch.setenv("ESTIMATOR_API_URL", "http://api-test:8000")
     fake = FakeApi()
     st.cache_data.clear()
-    with patch("httpx.get", fake.get), patch("httpx.stream", fake.stream):
+    with patch("httpx.get", fake.get), patch("httpx.post", fake.post):
         yield fake
 
 
@@ -152,8 +122,8 @@ def test_submit_sends_estimation_request_to_api(api):
     at = submit(run_app())
 
     assert not at.exception
-    method, url, payload = api.requests[0]
-    assert (method, url) == ("POST", "http://api-test:8000/api/v1/estimate/stream")
+    url, payload = api.requests[0]
+    assert url == "http://api-test:8000/api/v1/estimate"
     assert payload == {
         "description": DESCRIPTION,
         "project_type": "mobile_app",
@@ -162,21 +132,23 @@ def test_submit_sends_estimation_request_to_api(api):
     }
 
 
-def test_shows_streamed_estimation_and_metrics(api):
+def test_shows_estimation_metrics_and_structured_result(api):
     at = submit(run_app())
 
     assert "## Estimación: App autoescuelas" in all_markdown(at)
     assert len(at.session_state.history) == 1
     metrics = {m.label: m.value for m in at.sidebar.metric}
-    assert metrics["Tokens entrada"] == "1.200"
-    assert metrics["Coste"] == "0,0027 $"
+    assert metrics["Tokens entrada"] == "3.500"
+    assert metrics["Coste"] == "0,0095 $"
+    assert metrics["Confianza"] == "75 %"
     assert metrics["Respuesta"] == "Completa"
+    assert any(e.label == "Ver estimación estructurada (JSON)" for e in at.main.expander)
     assert any("prompt v1" in c.value for c in at.caption)
 
 
 def test_previous_estimations_are_kept_folded(api):
     at = submit(run_app())
-    api.events = api.estimation(title="Segunda estimación")
+    api.body = api_response(make_result(project_name="Segunda estimación"))
     at = submit(at, detail_level=DetailLevel.SUMMARY)
 
     assert len(at.session_state.history) == 2
@@ -201,21 +173,24 @@ def test_invalid_description_is_not_sent(api):
     assert "Revisa el formulario" in at.error[0].value
 
 
-def test_api_error_event_is_shown(api):
-    api.events = [("error", {"message": "Error al llamar al LLM: conexión rechazada"})]
+def test_guardrail_rejection_is_shown(api):
+    api.status_code = 400
+    api.body = {"detail": {"reason": "pii", "message": "Contiene datos personales (email)."}}
 
     at = submit(run_app())
 
-    assert "conexión rechazada" in at.error[0].value
+    assert "Descripción rechazada: Contiene datos personales (email)." in at.error[0].value
     assert at.session_state.history == []
 
 
-def test_api_http_error_is_shown(api):
-    api.status_code = 422
+def test_api_error_is_shown(api):
+    api.status_code = 502
+    api.body = {"detail": "Error al llamar al LLM: conexión rechazada"}
 
     at = submit(run_app())
 
-    assert "La API respondió 422" in at.error[0].value
+    assert "La API respondió 502" in at.error[0].value
+    assert "conexión rechazada" in at.error[0].value
 
 
 def test_api_unreachable(api):
@@ -228,22 +203,27 @@ def test_api_unreachable(api):
     assert any("No se puede conectar con la API" in e.value for e in at.main.error)
 
 
+def test_out_of_scope_warning(api):
+    result = make_result(
+        confidence_pct=10,
+        summary="Fuera de alcance: falta saber qué funcionalidades quieren.",
+        phases=[make_phase("Sin estimar", 0)],
+    )
+    api.body = api_response(result)
+
+    at = submit(run_app())
+
+    assert "no ha podido estimar con suficiente confianza" in at.warning[0].value
+    assert {m.label: m.value for m in at.sidebar.metric}["Confianza"] == "10 %"
+
+
 def test_shows_cache_hit(api):
-    api.events = api.estimation(cache_hit=True, cost_usd=0.0)
+    api.body = api_response(cache_hit=True, cost_usd=0.0)
 
     at = submit(run_app())
 
     assert any("desde la caché" in c.value for c in at.sidebar.caption)
     assert {m.label: m.value for m in at.sidebar.metric}["Coste"] == "0,0000 $"
-
-
-def test_warns_when_estimation_is_truncated(api):
-    api.events = api.estimation(finish_reason="length")
-
-    at = submit(run_app())
-
-    assert "se ha cortado" in at.warning[0].value
-    assert {m.label: m.value for m in at.sidebar.metric}["Respuesta"] == "Cortada"
 
 
 def test_new_session_clears_history(api):
@@ -275,4 +255,4 @@ def test_sidebar_shows_prompts_of_last_estimation(api):
     system, user = render_estimation_prompt(request)
     codes = [c.value for c in at.sidebar.code]
     assert system in codes and user in codes
-    assert "texto en párrafos" in system  # el bloque del formato elegido
+    assert "texto en párrafos" in system

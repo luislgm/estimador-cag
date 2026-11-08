@@ -27,11 +27,13 @@ services:
       PHOENIX_WORKING_DIR: /mnt/data
     restart: unless-stopped
 
-  # Caché exact-match de respuestas del LLM (compartida por la API y Streamlit)
+  # Cachés de respuestas del LLM: exacta y semántica (compartidas por la API y Streamlit).
+  # Redis Stack incluye el módulo de búsqueda vectorial que necesita la caché semántica.
   redis:
-    image: redis:7.4.10-alpine
-    # appendonly: guarda cada escritura en disco, así la caché sobrevive a los reinicios
-    command: ["redis-server", "--appendonly", "yes"]
+    image: redis/redis-stack-server:7.4.0-v8
+    environment:
+      # appendonly: guarda cada escritura en disco, así la caché sobrevive a los reinicios
+      REDIS_ARGS: --appendonly yes
     ports:
       - "6379:6379"
     volumes:

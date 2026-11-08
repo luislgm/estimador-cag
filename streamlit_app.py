@@ -1,16 +1,15 @@
 """Cliente Streamlit del estimador CAG.
 
 Un formulario construye un EstimationRequest y lo envía al servicio IA
-(POST /api/v1/estimate/stream). La estimación se muestra en streaming según llega.
-Streamlit no llama al LLM: solo habla con la API, cuya URL se lee de ESTIMATOR_API_URL.
+(POST /api/v1/estimate). La API devuelve una estimación estructurada y validada, y su versión
+en markdown según el formato elegido. Streamlit no llama al LLM: solo habla con la API, cuya
+URL se lee de ESTIMATOR_API_URL.
 
 Ejecutar con:  uv run --group ui streamlit run streamlit_app.py
 """
 
-import json
 import os
 import time
-from collections.abc import Iterator
 from datetime import datetime
 
 import httpx
@@ -23,7 +22,7 @@ from app.schemas.estimation import DetailLevel, EstimationRequest, OutputFormat,
 
 load_dotenv()
 API_URL = os.getenv("ESTIMATOR_API_URL", "http://127.0.0.1:8000").rstrip("/")
-STREAM_ENDPOINT = f"{API_URL}/api/v1/estimate/stream"
+ESTIMATE_ENDPOINT = f"{API_URL}/api/v1/estimate"
 
 PROJECT_TYPE_LABELS = {
     ProjectType.MOBILE_APP: "App móvil",
@@ -41,7 +40,12 @@ OUTPUT_FORMAT_LABELS = {
     OutputFormat.LINE_ITEMS: "Desglose de tareas",
     OutputFormat.NARRATIVE: "Narrativo",
 }
-FINISH_REASON_LABELS = {"stop": "Completa", "length": "Cortada", "content_filter": "Rechazada"}
+FINISH_REASON_LABELS = {
+    "stop": "Completa",
+    "tool_calls": "Completa",  # salida estructurada: el modelo responde con la herramienta
+    "length": "Cortada",
+    "content_filter": "Rechazada",
+}
 
 
 def fmt_int(value: int) -> str:
@@ -64,51 +68,21 @@ def fmt_finish_reason(value: str) -> str:
     return FINISH_REASON_LABELS.get(value, value)
 
 
-class ApiStream:
-    """Llama a POST /api/v1/estimate/stream y, al iterar, devuelve los trozos de texto.
-
-    Al terminar, `response` tiene la respuesta completa (evento `done`) o `error` el mensaje
-    de error (evento `error`, o un código HTTP de error de la API).
-    """
-
-    def __init__(self, request: EstimationRequest):
-        self.payload = request.model_dump(mode="json")
-        self.response: dict | None = None
-        self.error: str | None = None
-
-    def __iter__(self) -> Iterator[str]:
-        with httpx.stream(
-            "POST",
-            STREAM_ENDPOINT,
-            json=self.payload,
-            timeout=httpx.Timeout(120.0, connect=5.0),
-        ) as http_response:
-            if http_response.status_code != 200:
-                http_response.read()
-                self.error = f"La API respondió {http_response.status_code}: {http_response.text}"
-                return
-            event = None
-            for line in http_response.iter_lines():
-                if line.startswith("event:"):
-                    event = line.removeprefix("event:").strip()
-                elif line.startswith("data:"):
-                    data = json.loads(line.removeprefix("data:").strip())
-                    if event == "token":
-                        yield data["text"]
-                    elif event == "done":
-                        self.response = data
-                    elif event == "error":
-                        self.error = data["message"]
-
-
-def timed(stream: ApiStream, timings: dict) -> Iterator[str]:
-    """Pasa los trozos del stream tal cual y anota cuándo llega el primero y cuándo acaba."""
+def call_api(request: EstimationRequest) -> tuple[dict | None, str | None, float]:
+    """Llama a POST /api/v1/estimate. Devuelve (respuesta, mensaje de error, segundos)."""
     start = time.perf_counter()
-    for chunk in stream:
-        timings.setdefault("first_token_seconds", time.perf_counter() - start)
-        yield chunk
-    timings["total_seconds"] = time.perf_counter() - start
-    timings.setdefault("first_token_seconds", timings["total_seconds"])
+    response = httpx.post(
+        ESTIMATE_ENDPOINT,
+        json=request.model_dump(mode="json"),
+        timeout=httpx.Timeout(180.0, connect=5.0),
+    )
+    seconds = time.perf_counter() - start
+    if response.status_code == 200:
+        return response.json(), None, seconds
+    detail = response.json().get("detail") if response.content else None
+    if response.status_code == 400 and isinstance(detail, dict):
+        return None, f"⛔ Descripción rechazada: {detail['message']}", seconds
+    return None, f"La API respondió {response.status_code}: {detail or response.text}", seconds
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -148,20 +122,23 @@ def entry_caption(entry: dict) -> str:
 
 
 def render_entry(entry: dict) -> None:
-    st.markdown(entry["text"])
-    if entry["metrics"]["finish_reason"] == "length":
+    if entry["result"]["summary"].startswith("Fuera de alcance:"):
         st.warning(
-            "La estimación se ha cortado porque alcanzó el límite de tokens de salida. "
-            "Puede faltar el final (totales, equipo o duración)."
+            "El modelo no ha podido estimar con suficiente confianza: la descripción no tiene "
+            "información suficiente. Añade más detalle y vuelve a intentarlo."
         )
+    st.markdown(entry["text"])
+    with st.expander("Ver estimación estructurada (JSON)"):
+        st.json(entry["result"], expanded=False)
     st.caption(entry_caption(entry))
 
 
-def make_entry(request: EstimationRequest, response: dict, timings: dict) -> dict:
+def make_entry(request: EstimationRequest, response: dict, seconds: float) -> dict:
     return {
         "time": datetime.now().strftime("%H:%M"),
         "request": request.model_dump(mode="json"),
         "text": response["text"],
+        "result": response["result"],
         "metrics": {
             "model": response["model"],
             "provider": response["provider"],
@@ -171,7 +148,9 @@ def make_entry(request: EstimationRequest, response: dict, timings: dict) -> dic
             "cost_usd": response["cost_usd"],
             "finish_reason": response["finish_reason"],
             "cache_hit": response["cache_hit"],
-            **timings,
+            "cache_kind": response.get("cache_kind"),
+            "confidence_pct": response["result"]["confidence_pct"],
+            "total_seconds": seconds,
         },
     }
 
@@ -248,22 +227,19 @@ if submitted:
         )
     else:
         st.caption(params_label(request.model_dump(mode="json")))
-        stream = ApiStream(request)
-        timings: dict = {}
         try:
-            st.write_stream(timed(stream, timings))
+            with st.spinner("Generando y validando la estimación…"):
+                response, error, seconds = call_api(request)
         except httpx.HTTPError as e:
             st.error(f"No se puede conectar con la API en {API_URL}: {e}")
         else:
-            if stream.error:
-                st.error(stream.error)
-            elif stream.response:
-                entry = make_entry(request, stream.response, timings)
+            if error:
+                st.error(error)
+            else:
+                entry = make_entry(request, response, seconds)
                 st.session_state.history.append(entry)
                 new_entry = True
-                if entry["metrics"]["finish_reason"] == "length":
-                    st.warning("La estimación se ha cortado: puede faltar el final.")
-                st.caption(entry_caption(entry))
+                render_entry(entry)
 
 history = st.session_state.history
 if history and not new_entry and not submitted:
@@ -286,12 +262,17 @@ with metrics_box:
         m = history[-1]["metrics"]
         st.caption(f"Modelo: **{m['model']}** · Prompt: **{m['prompt_version']}**")
         if m["cache_hit"]:
-            st.caption("⚡ Respuesta servida desde la caché: sin llamada al LLM")
+            kind = (
+                "semántica (descripción parecida)"
+                if m.get("cache_kind") == "semantic"
+                else "exacta"
+            )
+            st.caption(f"⚡ Respuesta servida desde la caché {kind}: sin llamada al LLM")
         c1, c2 = st.columns(2)
         c1.metric("Tokens entrada", fmt_int(m["input_tokens"]))
         c2.metric("Tokens salida", fmt_int(m["output_tokens"]))
         c1.metric("Tiempo total", fmt_seconds(m["total_seconds"]))
-        c2.metric("Primer token", fmt_seconds(m["first_token_seconds"]))
+        c2.metric("Confianza", f"{m['confidence_pct']} %")
         c1.metric("Coste", fmt_cost(m["cost_usd"]))
         c2.metric(
             "Respuesta",
