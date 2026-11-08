@@ -30,9 +30,11 @@ async def complete(fake):
     # Instructor distingue las funciones asíncronas por su tipo: se pasa el método, no el objeto
     acompletion = fake.acompletion if isinstance(fake, FakeLLM) else fake
     with patch.object(litellm, "acompletion", acompletion):
-        return await llm_client.acomplete_structured(
-            "system prompt", "user prompt", EstimationResult, max_tokens=8192
-        )
+        messages = [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user prompt"},
+        ]
+        return await llm_client.acomplete_structured(messages, EstimationResult, max_tokens=8192)
 
 
 @pytest.mark.parametrize(

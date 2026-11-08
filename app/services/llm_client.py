@@ -93,9 +93,13 @@ def _structured_client() -> instructor.AsyncInstructor:
 
 
 async def acomplete_structured(
-    system: str, user: str, response_model: type[T], max_tokens: int
+    messages: list[dict], response_model: type[T], max_tokens: int
 ) -> tuple[T, LLMCallInfo]:
-    """Pide al LLM una respuesta con la forma de `response_model`, ya validada."""
+    """Pide al LLM una respuesta con la forma de `response_model`, ya validada.
+
+    `messages` es el array completo que se envía: el system prompt, los turnos anteriores de
+    la conversación (si los hay) y el mensaje actual del usuario.
+    """
     settings = get_settings()
     model = model_id(settings)
     client = _structured_client()
@@ -114,10 +118,7 @@ async def acomplete_structured(
             model=model,
             api_key=_api_key(settings),
             max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            messages=messages,
             response_model=response_model,
             max_retries=MAX_RETRIES,
         )
@@ -126,7 +127,9 @@ async def acomplete_structured(
         # se distinguen de los de validación por la causa original
         if isinstance(e.__cause__, openai.OpenAIError):  # LiteLLM traduce los de todos
             raise _failed(e.__cause__, attempts, started) from e
-        message = f"la respuesta no pasó las validaciones tras {attempts} intentos: {e}"
+        # El detalle de cada intento va al log; al cliente, solo un resumen
+        log.debug("llm_validation_attempts", detail=str(e))
+        message = f"la respuesta no pasó las validaciones tras {attempts} intentos"
         raise _failed(LLMError(message), attempts, started) from e
 
     usage = raw.usage  # Instructor acumula los tokens de todos los intentos

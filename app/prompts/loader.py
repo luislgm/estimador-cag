@@ -10,7 +10,9 @@ Para crear una versión nueva se copia la carpeta (v1 -> v2), se edita y se pasa
 version="v2": el resto del código no cambia.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -27,14 +29,29 @@ _env = Environment(
 )
 
 
-def render_estimation_prompt(request: EstimationRequest, version: str = "v1") -> tuple[str, str]:
-    """Devuelve (system, user) listos para enviar al modelo."""
+def render_estimation_prompt(
+    request: EstimationRequest,
+    version: str = "v1",
+    *,
+    project_metadata: Any = None,
+    attachments: Sequence[Any] = (),
+) -> tuple[str, str]:
+    """Devuelve (system, user) listos para enviar al modelo.
+
+    - project_metadata: memoria de la sesión (ProjectMetadata). Si falta o está vacía, el
+      bloque <project_metadata> del system prompt queda vacío.
+    - attachments: adjuntos con `filename` y `text`, que se añaden al mensaje del usuario.
+    """
+    if project_metadata is not None and project_metadata.is_empty():
+        project_metadata = None
     context = {
         "version": version,
         "description": request.description,
         "project_type": request.project_type.value,
         "detail_level": request.detail_level.value,
         "output_format": request.output_format.value,
+        "project_metadata": project_metadata,
+        "attachments": list(attachments),
     }
     system = _env.get_template(f"estimation/{version}/system.j2").render(context)
     user = _env.get_template(f"estimation/{version}/user.j2").render(context)

@@ -3,3 +3,12 @@ Estima el siguiente proyecto:
 <descripcion_proyecto>
 {{ description }}
 </descripcion_proyecto>
+{% if attachments %}
+
+<documentacion_adjunta>
+{% for attachment in attachments %}
+--- attachment: {{ attachment.filename }} ---
+{{ attachment.text }}
+{% endfor %}
+</documentacion_adjunta>
+{% endif %}

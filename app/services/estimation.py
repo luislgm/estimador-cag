@@ -69,8 +69,9 @@ async def estimate(request: EstimationRequest) -> EstimationOutcome:
         return _from_cache(request, cached, "semantic")
 
     # 5. LLM con salida estructurada y validada
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     result, info = await llm_client.acomplete_structured(
-        system, user, EstimationResult, max_tokens=MAX_TOKENS
+        messages, EstimationResult, max_tokens=MAX_TOKENS
     )
 
     # 6. Guardrail de salida
@@ -92,7 +93,7 @@ async def estimate(request: EstimationRequest) -> EstimationOutcome:
     if semantic is not None:
         await semantic.store(request, bucket, payload)
 
-    return _outcome(request, result, info)
+    return build_outcome(request, result, info)
 
 
 def _from_cache(request: EstimationRequest, cached: dict, kind: str) -> EstimationOutcome:
@@ -100,10 +101,10 @@ def _from_cache(request: EstimationRequest, cached: dict, kind: str) -> Estimati
     log.info("estimation_cache_hit", kind=kind, saved_usd=info.cost_usd)
     # No se ha llamado al LLM: coste 0. Los tokens se conservan como información.
     result = EstimationResult.model_validate(cached["result"])
-    return _outcome(request, result, replace(info, cost_usd=0.0), cache_kind=kind)
+    return build_outcome(request, result, replace(info, cost_usd=0.0), cache_kind=kind)
 
 
-def _outcome(
+def build_outcome(
     request: EstimationRequest,
     result: EstimationResult,
     info: LLMCallInfo,

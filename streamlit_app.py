@@ -1,16 +1,17 @@
-"""Cliente Streamlit del estimador CAG.
+"""Cliente Streamlit del estimador CAG: conversación por sesiones, con memoria y adjuntos.
 
-Un formulario construye un EstimationRequest y lo envía al servicio IA
-(POST /api/v1/estimate). La API devuelve una estimación estructurada y validada, y su versión
-en markdown según el formato elegido. Streamlit no llama al LLM: solo habla con la API, cuya
-URL se lee de ESTIMATOR_API_URL.
+Al cargar la página crea una sesión en el servicio IA (POST /api/v1/sessions). Cada envío del
+formulario es un turno (POST /api/v1/sessions/{id}/estimate, multipart): la transcripción,
+los adjuntos (PDF o Word) y las opciones. El servicio recuerda el proyecto entre turnos; el
+panel lateral muestra esa memoria (project_metadata), separada del historial.
+
+Streamlit no llama al LLM: solo habla con la API, cuya URL se lee de ESTIMATOR_API_URL.
 
 Ejecutar con:  uv run --group ui streamlit run streamlit_app.py
 """
 
 import os
 import time
-from datetime import datetime
 
 import httpx
 import streamlit as st
@@ -19,10 +20,11 @@ from pydantic import ValidationError
 
 from app.prompts import PROMPT_VERSION, render_estimation_prompt, render_examples
 from app.schemas.estimation import DetailLevel, EstimationRequest, OutputFormat, ProjectType
+from app.sessions import ProjectMetadata
 
 load_dotenv()
 API_URL = os.getenv("ESTIMATOR_API_URL", "http://127.0.0.1:8000").rstrip("/")
-ESTIMATE_ENDPOINT = f"{API_URL}/api/v1/estimate"
+SESSIONS_URL = f"{API_URL}/api/v1/sessions"
 
 PROJECT_TYPE_LABELS = {
     ProjectType.MOBILE_APP: "App móvil",
@@ -40,12 +42,7 @@ OUTPUT_FORMAT_LABELS = {
     OutputFormat.LINE_ITEMS: "Desglose de tareas",
     OutputFormat.NARRATIVE: "Narrativo",
 }
-FINISH_REASON_LABELS = {
-    "stop": "Completa",
-    "tool_calls": "Completa",  # salida estructurada: el modelo responde con la herramienta
-    "length": "Cortada",
-    "content_filter": "Rechazada",
-}
+TIMEOUT = httpx.Timeout(180.0, connect=5.0)
 
 
 def fmt_int(value: int) -> str:
@@ -63,43 +60,6 @@ def fmt_cost(value: float | None) -> str:
     return "n/d" if value is None else f"{value:.4f}".replace(".", ",") + " $"
 
 
-def fmt_finish_reason(value: str) -> str:
-    """Traduce el motivo de fin técnico de la API a un texto comprensible."""
-    return FINISH_REASON_LABELS.get(value, value)
-
-
-def call_api(request: EstimationRequest) -> tuple[dict | None, str | None, float]:
-    """Llama a POST /api/v1/estimate. Devuelve (respuesta, mensaje de error, segundos)."""
-    start = time.perf_counter()
-    response = httpx.post(
-        ESTIMATE_ENDPOINT,
-        json=request.model_dump(mode="json"),
-        timeout=httpx.Timeout(180.0, connect=5.0),
-    )
-    seconds = time.perf_counter() - start
-    if response.status_code == 200:
-        return response.json(), None, seconds
-    detail = response.json().get("detail") if response.content else None
-    if response.status_code == 400 and isinstance(detail, dict):
-        return None, f"⛔ Descripción rechazada: {detail['message']}", seconds
-    return None, f"La API respondió {response.status_code}: {detail or response.text}", seconds
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def api_health() -> dict | None:
-    try:
-        return httpx.get(f"{API_URL}/health", timeout=3).json()
-    except httpx.HTTPError:
-        return None
-
-
-def entry_title(entry: dict) -> str:
-    first_line = entry["text"].strip().splitlines()[0] if entry["text"].strip() else ""
-    if first_line.startswith("## Estimación:"):
-        return first_line.removeprefix("## Estimación:").strip()
-    return entry["request"]["description"][:60] + "…"
-
-
 def params_label(request: dict) -> str:
     return " · ".join(
         [
@@ -110,61 +70,84 @@ def params_label(request: dict) -> str:
     )
 
 
-def entry_caption(entry: dict) -> str:
-    m = entry["metrics"]
-    caption = (
-        f"{m['model']} · prompt {m['prompt_version']} · "
-        f"{fmt_int(m['input_tokens'] + m['output_tokens'])} tokens "
-        f"({fmt_int(m['input_tokens'])} entrada + {fmt_int(m['output_tokens'])} salida) · "
-        f"{fmt_seconds(m['total_seconds'])} · {fmt_cost(m['cost_usd'])}"
-    )
-    return caption + (" · ⚡ desde caché" if m["cache_hit"] else "")
+@st.cache_data(ttl=30, show_spinner=False)
+def api_health() -> dict | None:
+    try:
+        return httpx.get(f"{API_URL}/health", timeout=3).json()
+    except httpx.HTTPError:
+        return None
 
 
-def render_entry(entry: dict) -> None:
-    if entry["result"]["summary"].startswith("Fuera de alcance:"):
-        st.warning(
-            "El modelo no ha podido estimar con suficiente confianza: la descripción no tiene "
-            "información suficiente. Añade más detalle y vuelve a intentarlo."
-        )
-    st.markdown(entry["text"])
-    with st.expander("Ver estimación estructurada (JSON)"):
-        st.json(entry["result"], expanded=False)
-    st.caption(entry_caption(entry))
+def new_session() -> None:
+    """Crea una sesión en la API y reinicia la conversación en la página."""
+    st.session_state.turns = []
+    st.session_state.metadata = ProjectMetadata().model_dump()
+    st.session_state.window = None
+    try:
+        response = httpx.post(SESSIONS_URL, timeout=TIMEOUT)
+        st.session_state.session_id = response.json()["session_id"]
+    except httpx.HTTPError:
+        st.session_state.session_id = None
 
 
-def make_entry(request: EstimationRequest, response: dict, seconds: float) -> dict:
-    return {
-        "time": datetime.now().strftime("%H:%M"),
-        "request": request.model_dump(mode="json"),
-        "text": response["text"],
-        "result": response["result"],
-        "metrics": {
-            "model": response["model"],
-            "provider": response["provider"],
-            "prompt_version": response["prompt_version"],
-            "input_tokens": response["usage"]["input_tokens"],
-            "output_tokens": response["usage"]["output_tokens"],
-            "cost_usd": response["cost_usd"],
-            "finish_reason": response["finish_reason"],
-            "cache_hit": response["cache_hit"],
-            "cache_kind": response.get("cache_kind"),
-            "confidence_pct": response["result"]["confidence_pct"],
-            "total_seconds": seconds,
+def send_turn(request: EstimationRequest, files) -> tuple[dict | None, str | None, float]:
+    """Envía un turno. Devuelve (respuesta, mensaje de error, segundos)."""
+    start = time.perf_counter()
+    response = httpx.post(
+        f"{SESSIONS_URL}/{st.session_state.session_id}/estimate",
+        data={
+            "transcript": request.description,
+            "project_type": request.project_type.value,
+            "detail_level": request.detail_level.value,
+            "output_format": request.output_format.value,
         },
-    }
+        files=[("attachments", (f.name, f.getvalue(), f.type)) for f in files] or None,
+        timeout=TIMEOUT,
+    )
+    seconds = time.perf_counter() - start
+    if response.status_code == 200:
+        return response.json(), None, seconds
+    detail = response.json().get("detail") if response.content else None
+    if response.status_code == 404:
+        return None, "session_lost", seconds
+    if response.status_code == 400 and isinstance(detail, dict):
+        return None, f"⛔ Descripción rechazada: {detail['message']}", seconds
+    return None, f"La API respondió {response.status_code}: {detail or response.text}", seconds
+
+
+def render_turn(turn: dict) -> None:
+    with st.chat_message("user"):
+        st.markdown(turn["request"]["description"])
+        if turn["attachments"]:
+            st.caption("📎 " + ", ".join(a["filename"] for a in turn["attachments"]))
+        st.caption(params_label(turn["request"]))
+    with st.chat_message("assistant"):
+        r = turn["response"]
+        if r["result"]["summary"].startswith("Fuera de alcance:"):
+            st.warning(
+                "El modelo no ha podido estimar con suficiente confianza: falta información. "
+                "Añade más detalle en el siguiente mensaje."
+            )
+        st.markdown(r["text"])
+        with st.expander("Ver estimación estructurada (JSON)"):
+            st.json(r["result"], expanded=False)
+        st.caption(
+            f"Turno {r['session']['turns']} · {r['model']} · "
+            f"{fmt_int(r['usage']['input_tokens'] + r['usage']['output_tokens'])} tokens · "
+            f"{fmt_seconds(turn['seconds'])} · {fmt_cost(r['cost_usd'])}"
+        )
 
 
 # --- Página ---
 st.set_page_config(page_title="Estimador CAG", page_icon="📋")
 st.title("📋 Estimador CAG")
 st.caption(
-    "Describe el proyecto (o pega la transcripción de la reunión), elige el tipo, el nivel "
-    "de detalle y el formato, y obtendrás una estimación basada en estimaciones previas."
+    "Describe el proyecto y ve refinándolo en varios mensajes: el estimador recuerda de qué "
+    "proyecto habláis. Puedes adjuntar PDFs o documentos Word con especificaciones."
 )
 
-if "history" not in st.session_state:
-    st.session_state.history = []
+if "session_id" not in st.session_state:
+    new_session()
 
 with st.sidebar:
     st.header("Servicio IA")
@@ -173,26 +156,42 @@ with st.sidebar:
         st.caption(f"✅ {API_URL} · **{health['provider']}** · **{health['model']}**")
     else:
         st.error(f"No se puede conectar con la API en {API_URL}")
-    if st.button("Nueva sesión", width="stretch"):
-        st.session_state.history = []
+    if st.button("Nueva conversación", width="stretch"):
+        new_session()
+    if st.session_state.session_id:
+        st.caption(f"Sesión `{st.session_state.session_id[:8]}`")
+
+    st.subheader("🧠 Memoria del proyecto")
+    memory_box = st.container()  # se rellena al final, con el estado tras el último turno
 
     st.subheader("📊 Última llamada")
-    metrics_box = st.container()  # se rellena al final, con la llamada que acaba de hacerse
+    metrics_box = st.container()
 
-    st.subheader(f"🧠 Prompts ({PROMPT_VERSION})")
-    prompts_box = st.container()  # se rellena al final, con la última estimación
+    st.subheader(f"📝 System prompt ({PROMPT_VERSION})")
+    prompt_box = st.container()
 
     examples = render_examples(PROMPT_VERSION)
     st.subheader(f"📚 Contexto inyectado ({examples.count('<ejemplo numero=')} estimaciones)")
     with st.expander("Ver estimaciones de ejemplo (examples.j2)"):
         st.code(examples, language="markdown", wrap_lines=True)
 
-with st.form("estimation_form"):
+for turn in st.session_state.turns:
+    render_turn(turn)
+
+with st.form("turn_form", clear_on_submit=True):
+    first = not st.session_state.turns
     description = st.text_area(
-        "Descripción del proyecto",
-        height=180,
-        placeholder="Objetivos, funcionalidades, usuarios, integraciones, plazos…",
+        "Descripción del proyecto" if first else "Siguiente mensaje",
+        height=150,
+        placeholder=(
+            "Objetivos, funcionalidades, usuarios, integraciones, plazos…"
+            if first
+            else "Añade información, cambia el alcance o pide que ajuste la estimación…"
+        ),
         help="Entre 20 y 2.000 caracteres.",
+    )
+    attachments = st.file_uploader(
+        "Adjuntos (PDF o Word)", type=["pdf", "docx"], accept_multiple_files=True
     )
     col1, col2 = st.columns(2)
     project_type = col1.selectbox(
@@ -208,9 +207,8 @@ with st.form("estimation_form"):
         format_func=DETAIL_LEVEL_LABELS.get,
         horizontal=True,
     )
-    submitted = st.form_submit_button("Estimar", type="primary")
+    submitted = st.form_submit_button("Enviar", type="primary")
 
-new_entry = False
 if submitted:
     try:
         # Mismas reglas de validación que la API
@@ -221,80 +219,76 @@ if submitted:
             output_format=output_format,
         )
     except ValidationError as e:
-        st.error(
-            "Revisa el formulario: " + "; ".join(err["msg"] for err in e.errors()),
-            icon="⚠️",
-        )
+        st.error("Revisa el formulario: " + "; ".join(err["msg"] for err in e.errors()), icon="⚠️")
     else:
-        st.caption(params_label(request.model_dump(mode="json")))
+        if not st.session_state.session_id:
+            new_session()
         try:
             with st.spinner("Generando y validando la estimación…"):
-                response, error, seconds = call_api(request)
+                response, error, seconds = send_turn(request, attachments or [])
         except httpx.HTTPError as e:
             st.error(f"No se puede conectar con la API en {API_URL}: {e}")
         else:
-            if error:
+            if error == "session_lost":
+                new_session()
+                st.warning(
+                    "La sesión ya no existe (el servicio se ha reiniciado). He empezado una "
+                    "conversación nueva: vuelve a enviar el mensaje."
+                )
+            elif error:
                 st.error(error)
             else:
-                entry = make_entry(request, response, seconds)
-                st.session_state.history.append(entry)
-                new_entry = True
-                render_entry(entry)
+                st.session_state.turns.append(
+                    {
+                        "request": request.model_dump(mode="json"),
+                        "attachments": response["attachments"],
+                        "response": response,
+                        "seconds": seconds,
+                    }
+                )
+                st.session_state.metadata = response["session"]["project_metadata"]
+                st.session_state.window = response["session"]
+                st.rerun()  # para mostrar el turno en la conversación, encima del formulario
 
-history = st.session_state.history
-if history and not new_entry and not submitted:
-    st.caption(params_label(history[-1]["request"]))
-    render_entry(history[-1])
-
-previous = history[:-1] if history and (new_entry or not submitted) else history
-if previous:
-    st.divider()
-    st.subheader("Estimaciones anteriores de esta sesión")
-    for entry in reversed(previous):
-        label = f"{entry['time']} · {entry_title(entry)} · {params_label(entry['request'])}"
-        with st.expander(label):
-            render_entry(entry)
+metadata = ProjectMetadata(**st.session_state.metadata)
+with memory_box:
+    if metadata.is_empty():
+        st.caption("Vacía: se rellena con la primera estimación.")
+    else:
+        st.markdown(f"**Proyecto:** {metadata.project_name or '—'}")
+        st.markdown(f"**Equipo asumido:** {metadata.assumed_team_size or '—'} personas")
+        st.markdown("**Tecnologías:** " + (", ".join(metadata.mentioned_technologies) or "—"))
+        with st.expander("Alcance acordado"):
+            st.write(metadata.agreed_scope or "—")
+    window = st.session_state.window
+    if window:
+        st.caption(
+            f"Historial: {window['turns']} turno(s); se envían al LLM los últimos "
+            f"{window['turns_in_window']} de un máximo de {window['max_turns']}."
+        )
 
 with metrics_box:
-    if not history:
+    if not st.session_state.turns:
         st.caption("Aún no se ha hecho ninguna estimación.")
     else:
-        m = history[-1]["metrics"]
-        st.caption(f"Modelo: **{m['model']}** · Prompt: **{m['prompt_version']}**")
-        if m["cache_hit"]:
-            kind = (
-                "semántica (descripción parecida)"
-                if m.get("cache_kind") == "semantic"
-                else "exacta"
-            )
-            st.caption(f"⚡ Respuesta servida desde la caché {kind}: sin llamada al LLM")
+        last = st.session_state.turns[-1]
+        r = last["response"]
         c1, c2 = st.columns(2)
-        c1.metric("Tokens entrada", fmt_int(m["input_tokens"]))
-        c2.metric("Tokens salida", fmt_int(m["output_tokens"]))
-        c1.metric("Tiempo total", fmt_seconds(m["total_seconds"]))
-        c2.metric("Confianza", f"{m['confidence_pct']} %")
-        c1.metric("Coste", fmt_cost(m["cost_usd"]))
-        c2.metric(
-            "Respuesta",
-            fmt_finish_reason(m["finish_reason"]),
-            help=f"Motivo de fin devuelto por la API: {m['finish_reason']}",
-        )
+        c1.metric("Tokens entrada", fmt_int(r["usage"]["input_tokens"]))
+        c2.metric("Tokens salida", fmt_int(r["usage"]["output_tokens"]))
+        c1.metric("Tiempo", fmt_seconds(last["seconds"]))
+        c2.metric("Confianza", f"{r['result']['confidence_pct']} %")
+        c1.metric("Coste", fmt_cost(r["cost_usd"]))
 
-with prompts_box:
-    if history:
-        prompt_request = EstimationRequest(**history[-1]["request"])
-        st.caption("Los de la última estimación.")
-    else:
-        # Antes de la primera estimación: con las opciones por defecto del formulario
-        prompt_request = EstimationRequest(
-            description="(aquí irá la descripción del proyecto)",
-            project_type=ProjectType.MOBILE_APP,
-            detail_level=DetailLevel.MEDIUM,
-            output_format=OutputFormat.PHASES_TABLE,
-        )
-        st.caption("Con las opciones por defecto; tras estimar, los de la última estimación.")
-    system_prompt, user_prompt = render_estimation_prompt(prompt_request, PROMPT_VERSION)
-    with st.expander(f"System ({fmt_int(len(system_prompt))} caracteres)"):
+with prompt_box:
+    # El system prompt del siguiente turno, con la memoria actual del proyecto
+    preview = EstimationRequest(
+        description="(aquí irá el siguiente mensaje)",
+        project_type=ProjectType.WEB_SAAS,
+        detail_level=DetailLevel.MEDIUM,
+        output_format=OutputFormat.PHASES_TABLE,
+    )
+    system_prompt, _ = render_estimation_prompt(preview, PROMPT_VERSION, project_metadata=metadata)
+    st.caption("El del siguiente turno, con la memoria actual (opciones por defecto).")
+    with st.expander(f"Ver ({fmt_int(len(system_prompt))} caracteres)"):
         st.code(system_prompt, language="markdown", wrap_lines=True)
-    with st.expander("User"):
-        st.code(user_prompt, language="markdown", wrap_lines=True)

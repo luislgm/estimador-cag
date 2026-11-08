@@ -13,6 +13,7 @@ from app.guardrails.input import InputGuardrailViolation
 from app.prompts import PROMPT_VERSION
 from app.schemas.estimation import EstimationRequest, EstimationResponse, TokenUsage
 from app.services import estimation
+from app.services.estimation import EstimationOutcome
 from app.services.llm_client import LLMError
 
 log = structlog.get_logger(module=__name__)
@@ -46,21 +47,27 @@ async def estimate(request: EstimationRequest) -> EstimationResponse:
     except LLMError as e:
         raise HTTPException(status_code=502, detail=f"Error al llamar al LLM: {e}") from e
 
+    return EstimationResponse(**response_fields(outcome))
+
+
+def response_fields(outcome: EstimationOutcome) -> dict:
+    """Campos de EstimationResponse a partir del resultado del pipeline (lo reutiliza el
+    endpoint de sesiones, cuya respuesta amplía EstimationResponse)."""
     info = outcome.info
-    return EstimationResponse(
-        text=outcome.text,
-        prompt_version=outcome.prompt_version,
-        result=outcome.result,
-        model=info.model,
-        provider=info.provider,
-        usage=TokenUsage(
+    return {
+        "text": outcome.text,
+        "prompt_version": outcome.prompt_version,
+        "result": outcome.result,
+        "model": info.model,
+        "provider": info.provider,
+        "usage": TokenUsage(
             input_tokens=info.input_tokens,
             output_tokens=info.output_tokens,
             total_tokens=info.input_tokens + info.output_tokens,
         ),
-        cost_usd=info.cost_usd,
-        finish_reason=info.finish_reason,
-        cache_hit=outcome.cache_hit,
-        cache_kind=outcome.cache_kind,
-        created_at=datetime.now(UTC),
-    )
+        "cost_usd": info.cost_usd,
+        "finish_reason": info.finish_reason,
+        "cache_hit": outcome.cache_hit,
+        "cache_kind": outcome.cache_kind,
+        "created_at": datetime.now(UTC),
+    }

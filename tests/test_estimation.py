@@ -35,7 +35,10 @@ async def test_full_pipeline(llm):
 
     system, user = render_estimation_prompt(request, version="v1")
     llm.assert_awaited_once()
-    assert llm.await_args.args[:2] == (system, user)
+    assert llm.await_args.args[0] == [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
     assert llm.await_args.kwargs["max_tokens"] == estimation.MAX_TOKENS
     assert outcome.result == RESULT
     assert outcome.info == INFO

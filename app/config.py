@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     semantic_cache_threshold: float = Field(default=0.95, ge=0, le=1)
     embedding_model: str = "openai/text-embedding-3-small"
 
+    # Sesiones conversacionales: turnos (par user + assistant) que se envían al LLM
+    session_max_turns: int = Field(default=6, ge=1, le=50)
+
     # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
     phoenix_collector_endpoint: str | None = None
     phoenix_project_name: str = "estimador-cag"

@@ -176,7 +176,13 @@ def test_end_to_end_with_structured_output(client):
 def test_openapi_docs(client):
     assert client.get("/docs").status_code == 200
     paths = client.get("/openapi.json").json()["paths"]
-    assert set(paths) == {"/api/v1/estimate", "/health"}
+    assert set(paths) == {
+        "/api/v1/estimate",
+        "/api/v1/sessions",
+        "/api/v1/sessions/{session_id}",
+        "/api/v1/sessions/{session_id}/estimate",
+        "/health",
+    }
 
 
 # --- Arranque, logs y request_id ---

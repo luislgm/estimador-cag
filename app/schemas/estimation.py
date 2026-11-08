@@ -88,6 +88,10 @@ class EstimationResult(BaseModel):
     confidence_pct: int = Field(..., ge=0, le=100, description="Confianza en la estimación (%)")
     phases: list[Phase] = Field(..., min_length=1, max_length=15)
     team: list[str] = Field(default_factory=list, description="Equipo recomendado (roles)")
+    team_size: int = Field(default=0, ge=0, le=100, description="Personas del equipo recomendado")
+    technologies: list[str] = Field(
+        default_factory=list, description="Tecnologías mencionadas en la conversación o asumidas"
+    )
     risks: list[str] = Field(default_factory=list, description="Riesgos principales")
     total_hours: int = Field(..., ge=0, le=50_000, description="Suma de las horas de las fases")
     total_cost_eur: int = Field(..., ge=0, le=2_500_000, description="Suma de los costes")

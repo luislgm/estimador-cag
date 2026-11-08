@@ -28,12 +28,16 @@ estimador-cag/
 │   │   ├── input.py            # Moderación, prompt injection y datos personales
 │   │   └── output.py           # Deja sin cifras las estimaciones fuera de alcance
 │   ├── routers/
-│   │   └── estimations.py      # Endpoint POST /api/v1/estimate (traduce errores a HTTP)
+│   │   ├── estimations.py      # POST /api/v1/estimate (sin sesión)
+│   │   └── sessions.py         # Sesiones: POST /sessions y POST /sessions/{id}/estimate
 │   ├── schemas/                # Contratos de datos (Pydantic): request, resultado y response
 │   │   ├── estimation.py
 │   │   └── health.py
+│   ├── sessions.py             # Estado de las sesiones: historial y memoria del proyecto
 │   ├── services/
 │   │   ├── estimation.py       # Orquestador del pipeline
+│   │   ├── conversation.py     # Un turno de una sesión (memoria + historial + adjuntos)
+│   │   ├── attachments.py      # Extracción de texto de PDFs y Word
 │   │   ├── llm_client.py       # Wrapper sobre LiteLLM + Instructor (salida estructurada)
 │   │   ├── render.py           # Resultado estructurado -> markdown según el formato
 │   │   ├── cache.py            # Caché exacta en Redis
@@ -83,6 +87,7 @@ cp .env.example .env
 | `SEMANTIC_CACHE_MODE` | Caché semántica: `off`, `log_only` u `on` | `off` |
 | `SEMANTIC_CACHE_THRESHOLD` | Similitud mínima para servir desde la caché semántica | `0.95` |
 | `MODERATION_ENABLED` | Guardrail de moderación de OpenAI (necesita `OPENAI_API_KEY`) | `false` |
+| `SESSION_MAX_TURNS` | Turnos (par user + assistant) del historial que se envían al LLM | `6` |
 
 Ejemplos de configuración:
 
@@ -143,7 +148,7 @@ docker run --rm -p 8000:8000 --env-file .env ghcr.io/luislgm/estimador-cag:lates
 
 ### Cliente Streamlit
 
-Un formulario para pedir estimaciones al servicio IA, en [`streamlit_app.py`](streamlit_app.py). Con la API en marcha:
+Una conversación para estimar un proyecto en varios mensajes, en [`streamlit_app.py`](streamlit_app.py). Con la API en marcha:
 
 ```bash
 uv run --group ui streamlit run streamlit_app.py
@@ -151,13 +156,57 @@ uv run --group ui streamlit run streamlit_app.py
 
 Se abre en http://localhost:8501.
 
-- **Es un cliente de la API:** el formulario (`st.form`) construye un `EstimationRequest`, lo valida con el mismo schema de Pydantic que la API y lo envía a `POST /api/v1/estimate`. Streamlit no llama al LLM ni necesita sus API keys; solo la URL de la API (`ESTIMATOR_API_URL`).
-- **Resultado:** muestra el markdown de la estimación y, en un desplegable, el **objeto estructurado** (JSON). Si un guardrail rechaza la descripción, muestra el motivo; si la confianza es baja, un aviso.
-- **Sin streaming:** la respuesta estructurada solo es válida cuando está completa (y los validadores pueden pedir un reintento), así que se muestra al terminar.
-- **Historial de la sesión:** la última estimación se muestra completa y las anteriores quedan plegadas debajo (con hora, título, tipo, detalle y formato), para comparar combinaciones. Se borra con "Nueva sesión" o al recargar la página.
-- **Panel lateral:** estado de la API (proveedor y modelo), métricas de la última llamada (tokens, tiempo, coste, confianza y si vino de la caché exacta o semántica), los prompts (system y user) de la última estimación y las estimaciones de ejemplo (contexto CAG).
+- **Es un cliente de la API:** al cargar la página crea una sesión (`POST /api/v1/sessions`) y guarda el `session_id` en `st.session_state`. Cada envío del formulario es un turno (`POST /api/v1/sessions/{id}/estimate`), con la transcripción, los **adjuntos** (selector múltiple de PDF y Word) y las opciones. Streamlit no llama al LLM ni necesita sus API keys; solo la URL de la API (`ESTIMATOR_API_URL`).
+- **Conversación:** cada turno muestra el mensaje (con sus adjuntos) y la estimación, con su versión estructurada (JSON) en un desplegable.
+- **Panel lateral:** la **memoria del proyecto** (`project_metadata`) y cuántos turnos del historial se envían al LLM, para ver la separación entre memoria e historial; las métricas de la última llamada; el system prompt del siguiente turno, con la memoria actual; y las estimaciones de ejemplo.
+- **"Nueva conversación"** crea otra sesión. Si la API se ha reiniciado y la sesión ya no existe, se crea una nueva automáticamente y se avisa.
 - Streamlit está en un grupo de dependencias aparte (`ui`) para no incluirlo en la imagen Docker de la API.
 
+## Sesiones conversacionales: memoria, historial y adjuntos
+
+Una conversación iterativa sobre un mismo proyecto: el cliente refina el alcance, añade información o sube documentos, y el estimador recuerda de qué proyecto se habla.
+
+```
+POST /api/v1/sessions                         -> {"session_id": "..."}
+POST /api/v1/sessions/{session_id}/estimate   (multipart: transcript + attachments + opciones)
+GET  /api/v1/sessions/{session_id}            -> memoria y turnos de la sesión
+```
+
+### Historial y memoria, por separado
+
+[`app/sessions.py`](app/sessions.py) separa dos cosas que a menudo se confunden:
+
+| | **Historial** (`ConversationHistory`) | **Memoria** (`ProjectMetadata`) |
+|---|---|---|
+| Qué es | Los mensajes user/assistant que viajan al LLM en cada llamada | Los hechos del proyecto: nombre, tamaño del equipo, tecnologías y alcance acordado |
+| Cómo se usa | Se envían los últimos `SESSION_MAX_TURNS` turnos (ventana deslizante, 6 por defecto) | Se inyecta en el system prompt, en el bloque `<project_metadata>` (vacío en el primer turno) |
+| Qué pasa con lo antiguo | Los turnos más viejos se descartan | Se conserva: el nombre del proyecto no se pierde aunque el turno donde apareció ya no esté en la ventana |
+
+- **Ventana deslizante:** cuando hay más de `SESSION_MAX_TURNS` turnos, se descartan los pares más antiguos. El system prompt no se guarda en el historial: `ConversationHistory.to_messages_list()` lo regenera en cada turno a partir del `project_metadata` actual y devuelve el array `messages` (system + turnos de la ventana), al que el turno añade el mensaje nuevo antes de llamar al LLM. Es la estrategia razonable para empezar: simple, predecible y con un coste por llamada acotado.
+- **Respuesta del asistente en el historial:** se guarda la estimación en **markdown**, no en JSON. Con respuestas JSON en el historial, el modelo las imita y acaba anidando JSON como texto dentro de la herramienta, y la respuesta deja de validar (lo vimos en las pruebas reales con 3 turnos). El markdown además ocupa la mitad de tokens.
+- **Sin caché:** el endpoint de sesión no usa las cachés, porque la respuesta depende del historial y de la memoria.
+- **Volatilidad aceptada:** las sesiones viven en un diccionario en memoria del proceso. Se pierden al reiniciar el servicio y no se comparten entre réplicas; para producción irían en Redis o en una base de datos.
+
+### Cómo se extrae el `project_metadata`
+
+**A partir de la propia salida estructurada, sin una segunda llamada al LLM.** El `EstimationResult` ya incluye `project_name`, `summary` (alcance), `team_size` y `technologies`, que el modelo rellena dentro del esquema validado. Después de cada turno, `ProjectMetadata.updated_with(result)` copia esos campos:
+
+- Es **tan barato como la heurística** (no hay llamada extra ni latencia añadida) y **tan fiable como el extractor**, porque los datos vienen del esquema validado, no de buscar patrones en un texto libre.
+- Cada campo guarda **el valor más reciente**. El modelo recibe la memoria anterior y la refina; sumar las listas de tecnologías de todos los turnos dejaría suposiciones superadas (por ejemplo, "PostgreSQL o MySQL" junto a "PostgreSQL" una vez confirmado).
+- Una estimación "fuera de alcance" no cambia la memoria.
+
+### Adjuntos: camino B (extracción local)
+
+Se admiten **PDF y Word (`.docx`)**, como mucho 5 archivos de 5 MB. [`app/services/attachments.py`](app/services/attachments.py) extrae el texto en el servicio (`pypdf` y `python-docx`, tablas incluidas) y lo añade al mensaje del usuario, separado con `--- attachment: nombre.pdf ---`. Cada documento se recorta a 15.000 caracteres para acotar los tokens.
+
+Por qué el camino B y no subir el archivo al LLM (camino A):
+
+- **Funciona igual con cualquier proveedor.** Todo pasa por LiteLLM; la Files API ataría el proyecto a OpenAI o a Anthropic.
+- **Los guardrails revisan también los documentos:** un PDF con datos personales o con instrucciones dirigidas al modelo se rechaza igual que la transcripción.
+- **Prepara el terreno para RAG** (trocear documentos en el módulo 3).
+- A cambio, se pierden las imágenes y los diagramas, y un PDF escaneado no aporta texto (se indica en el prompt).
+
+## Pipeline de estimación
 ## Pipeline de estimación
 
 [`app/services/estimation.py`](app/services/estimation.py) orquesta cada petición; el router solo traduce los errores a códigos HTTP:
@@ -368,6 +417,12 @@ Devuelve el estado del servicio y la configuración activa.
 ## Tests y calidad de código
 
 Los tests simulan la llamada al LLM, así que no necesitan API key ni consumen tokens.
+
+Los tests de las sesiones (Paso 7 del ejercicio de la sesión 05) están en [`tests/test_sessions_api.py`](tests/test_sessions_api.py), con `httpx.AsyncClient` sobre la app: dos turnos que actualizan el `project_metadata`, un PDF adjunto que cambia la estimación y 8 turnos en los que lo enviado al LLM nunca supera la ventana de `SESSION_MAX_TURNS`.
+
+```bash
+uv run pytest tests/test_sessions_api.py -v   # solo los de sesiones
+```
 
 ```bash
 uv run pytest --cov          # tests con cobertura (mínimo 80 %)

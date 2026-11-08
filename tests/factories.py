@@ -93,3 +93,56 @@ def tool_call_response(payload: dict, prompt_tokens=1000, completion_tokens=200)
             "total_tokens": prompt_tokens + completion_tokens,
         },
     )
+
+
+def make_pdf(*lines: str) -> bytes:
+    """Un PDF mínimo con texto (fuente Helvetica), que pypdf sabe leer."""
+    stream = (
+        "BT /F1 11 Tf 50 780 Td 14 TL "
+        + " ".join(
+            "(" + line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ") '"
+            for line in lines
+        )
+        + " ET"
+    )
+    content = stream.encode("latin-1")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
+        b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n" % len(content) + content + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    pdf = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    xref = len(pdf)
+    pdf += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    pdf += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    pdf += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        xref,
+    )
+    return pdf
+
+
+def make_docx(*paragraphs: str, table: list[list[str]] | None = None) -> bytes:
+    """Un documento Word con párrafos y, opcionalmente, una tabla."""
+    import io
+
+    import docx
+
+    document = docx.Document()
+    for text in paragraphs:
+        document.add_paragraph(text)
+    if table:
+        word_table = document.add_table(rows=len(table), cols=len(table[0]))
+        for r, row in enumerate(table):
+            for c, value in enumerate(row):
+                word_table.cell(r, c).text = value
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
