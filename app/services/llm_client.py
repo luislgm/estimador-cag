@@ -59,6 +59,22 @@ class LLMCallInfo:
         return self.finish_reason == "length"
 
 
+def combine_calls(calls: list[LLMCallInfo]) -> LLMCallInfo:
+    """Una sola LLMCallInfo con los tokens, el coste y los intentos de varias llamadas (por
+    ejemplo, las del actor y el crítico de un turno). Modelo y finish_reason, los de la última."""
+    costs = [c.cost_usd for c in calls if c.cost_usd is not None]
+    last = calls[-1]
+    return LLMCallInfo(
+        model=last.model,
+        provider=last.provider,
+        input_tokens=sum(c.input_tokens for c in calls),
+        output_tokens=sum(c.output_tokens for c in calls),
+        finish_reason=last.finish_reason,
+        cost_usd=round(sum(costs), 6) if costs else None,
+        attempts=sum(c.attempts for c in calls),
+    )
+
+
 def model_id(settings: Settings) -> str:
     """Identificador de LiteLLM: "<proveedor>/<modelo>", p. ej. "anthropic/claude-haiku-4-5"."""
     if "/" in settings.llm_model:

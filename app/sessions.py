@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.schemas.estimation import EstimationResult
+from app.tiers import TierResolution
 
 
 class ProjectMetadata(BaseModel):
@@ -59,52 +60,94 @@ class ProjectMetadata(BaseModel):
         )
 
 
+@dataclass(frozen=True)
+class Turn:
+    """Un turno de la conversación: el mensaje del usuario y la respuesta del asistente."""
+
+    user: str
+    assistant: str
+
+    def as_messages(self) -> list[dict]:
+        return [
+            {"role": "user", "content": self.user},
+            {"role": "assistant", "content": self.assistant},
+        ]
+
+
 class ConversationHistory:
-    """Historial con ventana deslizante: como mucho `max_turns` turnos (par user + assistant).
+    """Historial con ventana deslizante, más anclas y un resumen de lo que ya salió de ella.
+
+    Tres partes:
+
+    - Ventana: los últimos `max_turns` turnos, completos.
+    - Anclas: turnos antiguos que contienen un compromiso que no se puede olvidar (NDA,
+      contrato firmado, alcance cerrado, normativa...). Se conservan literales fuera de la
+      ventana, como mucho `max_anchors`.
+    - Resumen: un texto acumulado con el resto de turnos que ya salieron de la ventana.
+
+    Esta clase solo guarda el estado. Qué turno es un ancla y cómo se resume lo decide la
+    política de compresión (app/services/compression.py), que recibe los turnos que expulsa
+    add_turn().
 
     El system prompt no se guarda como un mensaje más: siempre va el primero, pero se regenera
-    en cada llamada a partir de la memoria actual del proyecto (ver to_messages_list), así que
-    la ventana nunca lo descarta y siempre refleja los últimos hechos conocidos.
+    en cada llamada a partir de la memoria actual del proyecto y del resumen (ver
+    to_messages_list), así que nunca se descarta y siempre refleja los últimos hechos.
     """
 
-    def __init__(self, max_turns: int):
+    def __init__(self, max_turns: int, max_anchors: int = 0):
         self.max_turns = max_turns
-        self._turns: list[tuple[str, str]] = []
+        self.max_anchors = max_anchors
+        self._turns: list[Turn] = []
+        self.anchors: list[Turn] = []
+        self.summary: str | None = None
+        self.summarized_turns = 0  # turnos absorbidos por el resumen
         self.total_turns = 0  # incluidos los que ya han salido de la ventana
 
-    def add_turn(self, user: str, assistant: str) -> None:
-        self._turns.append((user, assistant))
+    def add_turn(self, user: str, assistant: str) -> list[Turn]:
+        """Añade un turno y devuelve los que salen de la ventana (los más antiguos)."""
+        self._turns.append(Turn(user, assistant))
         self.total_turns += 1
-        if len(self._turns) > self.max_turns:
-            # Se descartan los pares más antiguos
-            self._turns = self._turns[-self.max_turns :]
+        overflow = len(self._turns) - self.max_turns
+        if overflow <= 0:
+            return []
+        evicted, self._turns = self._turns[:overflow], self._turns[overflow:]
+        return evicted
+
+    def add_anchor(self, turn: Turn) -> list[Turn]:
+        """Conserva un turno como ancla. Devuelve las anclas que ya no caben (las más
+        antiguas), para que pasen al resumen: así el prompt no crece sin límite."""
+        self.anchors.append(turn)
+        overflow = len(self.anchors) - self.max_anchors
+        if overflow <= 0:
+            return []
+        dropped, self.anchors = self.anchors[:overflow], self.anchors[overflow:]
+        return dropped
 
     def messages(self) -> list[dict]:
-        """Los turnos de la ventana como mensajes, sin system prompt."""
-        return [
-            message
-            for user, assistant in self._turns
-            for message in (
-                {"role": "user", "content": user},
-                {"role": "assistant", "content": assistant},
-            )
-        ]
+        """Anclas y turnos de la ventana como mensajes, en orden cronológico, sin system prompt.
+
+        Las anclas son siempre más antiguas que la ventana, así que van delante y se mantiene
+        la alternancia user/assistant.
+        """
+        return [message for turn in (*self.anchors, *self._turns) for message in turn.as_messages()]
 
     def to_messages_list(
         self,
         project_metadata: "ProjectMetadata",
-        build_system: Callable[["ProjectMetadata"], str],
+        build_system: Callable[["ProjectMetadata", str | None], str],
     ) -> list[dict]:
         """El array messages listo para el LLM: el system prompt, regenerado a partir del
-        project_metadata actual, seguido de los turnos de la ventana.
+        project_metadata actual (y del resumen de los turnos antiguos), seguido de las anclas
+        y los turnos de la ventana.
 
-        `build_system` construye el system prompt a partir de la memoria (renderiza la
+        `build_system(project_metadata, summary)` construye el system prompt (renderiza la
         plantilla con las opciones del turno: tipo, nivel de detalle y formato).
         """
-        system = build_system(project_metadata)
+        system = build_system(project_metadata, self.summary)
         return [{"role": "system", "content": system}, *self.messages()]
 
     def __len__(self) -> int:
+        """Turnos en la ventana."""
         return len(self._turns)
 
 
@@ -113,6 +156,8 @@ class Session:
     id: str
     history: ConversationHistory
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
+    compression_cost_usd: float = 0.0  # coste acumulado de las llamadas de resumen
+    tier: TierResolution | None = None  # audiencia del último turno
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -128,9 +173,13 @@ class SessionStore:
         self._lock = Lock()
 
     def create(self) -> Session:
+        settings = get_settings()
         session = Session(
             id=str(uuid.uuid4()),
-            history=ConversationHistory(max_turns=get_settings().session_max_turns),
+            history=ConversationHistory(
+                max_turns=settings.session_max_turns,
+                max_anchors=settings.session_max_anchors,
+            ),
         )
         with self._lock:
             self._sessions[session.id] = session

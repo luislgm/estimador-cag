@@ -35,7 +35,10 @@ def test_narrative_has_no_tables_or_lists():
 
 
 def test_assumptions_only_in_detailed():
-    phases = [make_phase("Diseño", 20, assumptions=["El cliente aporta su manual de marca"])]
+    phases = [
+        make_phase("Diseño", 20, assumptions=["El cliente aporta su manual de marca"]),
+        make_phase("Desarrollo", 60),
+    ]
     result = make_result(phases=phases)
 
     detailed = render_markdown(result, make_request(detail_level="detailed"))
@@ -46,7 +49,10 @@ def test_assumptions_only_in_detailed():
 
 
 def test_assumptions_in_every_format():
-    phases = [make_phase("Diseño", 20, assumptions=["Hay manual de marca"])]
+    phases = [
+        make_phase("Diseño", 20, assumptions=["Hay manual de marca"]),
+        make_phase("Desarrollo", 60),
+    ]
     result = make_result(phases=phases)
 
     for output_format in ("phases_table", "line_items", "narrative"):

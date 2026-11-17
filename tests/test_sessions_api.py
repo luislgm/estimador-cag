@@ -111,7 +111,7 @@ async def test_pdf_attachment_influences_the_estimation(client):
         # Simula un modelo que solo menciona SAP si el documento llega en el prompt
         technologies = ["PostgreSQL", "SAP Business One"] if "SAP Business One" in user else []
         hours = 120 if technologies else 80
-        phases = [make_phase("Desarrollo", hours)]
+        phases = [make_phase("Diseño", 20), make_phase("Desarrollo", hours - 20)]
         return make_result(phases=phases, technologies=technologies)
 
     pdf = make_pdf("Requisitos tecnicos", "Hay que integrarse con el ERP SAP Business One.")
@@ -139,6 +139,9 @@ async def test_history_sent_to_the_llm_never_exceeds_max_turns(client):
     sizes = []
 
     async def fake_acompletion(**params):
+        tool = params["tools"][0]["function"]["name"]
+        if tool == "ConversationSummary":  # la compresión de los turnos que salen de la ventana
+            return tool_call_response({"summary": "Resumen."}, name=tool)
         sizes.append(len(params["messages"]))
         return tool_call_response(make_result().model_dump(mode="json"))
 
@@ -175,6 +178,14 @@ async def test_create_and_get_session(client):
             "mentioned_technologies": [],
             "agreed_scope": None,
         },
+        "anchors": 0,
+        "max_anchors": 4,
+        "summarized_turns": 0,
+        "conversation_summary": None,
+        "compression_cost_usd": 0.0,
+        "tier": None,
+        "tier_rule": None,
+        "tier_inherited": False,
     }
 
 

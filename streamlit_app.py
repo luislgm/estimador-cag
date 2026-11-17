@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from app.prompts import PROMPT_VERSION, render_estimation_prompt, render_examples
 from app.schemas.estimation import DetailLevel, EstimationRequest, OutputFormat, ProjectType
 from app.sessions import ProjectMetadata
+from app.tiers import TIER_LABELS, Tier
 
 load_dotenv()
 API_URL = os.getenv("ESTIMATOR_API_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -90,17 +91,27 @@ def new_session() -> None:
         st.session_state.session_id = None
 
 
-def send_turn(request: EstimationRequest, files) -> tuple[dict | None, str | None, float]:
-    """Envía un turno. Devuelve (respuesta, mensaje de error, segundos)."""
+def send_turn(
+    request: EstimationRequest, files, tier: Tier | None = None, review: bool = False
+) -> tuple[dict | None, str | None, float]:
+    """Envía un turno. Devuelve (respuesta, mensaje de error, segundos).
+
+    Sin tier, la API lo deduce del mensaje y de los turnos anteriores. Con review, el turno
+    pasa por el ciclo Actor-Critic-Boss (/estimate-acb).
+    """
     start = time.perf_counter()
+    data = {
+        "transcript": request.description,
+        "project_type": request.project_type.value,
+        "detail_level": request.detail_level.value,
+        "output_format": request.output_format.value,
+    }
+    if tier is not None:
+        data["tier"] = tier.value
     response = httpx.post(
-        f"{SESSIONS_URL}/{st.session_state.session_id}/estimate",
-        data={
-            "transcript": request.description,
-            "project_type": request.project_type.value,
-            "detail_level": request.detail_level.value,
-            "output_format": request.output_format.value,
-        },
+        f"{SESSIONS_URL}/{st.session_state.session_id}/"
+        + ("estimate-acb" if review else "estimate"),
+        data=data,
         files=[("attachments", (f.name, f.getvalue(), f.type)) for f in files] or None,
         timeout=TIMEOUT,
     )
@@ -129,6 +140,8 @@ def render_turn(turn: dict) -> None:
                 "Añade más detalle en el siguiente mensaje."
             )
         st.markdown(r["text"])
+        if r.get("acb"):
+            render_review(r["acb"])
         with st.expander("Ver estimación estructurada (JSON)"):
             st.json(r["result"], expanded=False)
         st.caption(
@@ -136,6 +149,35 @@ def render_turn(turn: dict) -> None:
             f"{fmt_int(r['usage']['input_tokens'] + r['usage']['output_tokens'])} tokens · "
             f"{fmt_seconds(turn['seconds'])} · {fmt_cost(r['cost_usd'])}"
         )
+
+
+ACB_OUTCOMES = {
+    "accepted": "aceptada por el crítico",
+    "max_iterations": "sin más vueltas: se muestra la versión con menos problemas",
+    "critic_failed": "la revisión falló: se muestra sin revisar",
+    "revision_failed": "la nueva versión falló: se muestra la anterior",
+}
+
+
+def render_review(acb: dict) -> None:
+    """La traza del ciclo Actor-Critic-Boss: cada versión, lo que dijo el crítico y la
+    decisión del boss."""
+    hours = " → ".join(f"{i['total_hours']} h" for i in acb["iterations"])
+    label = f"🔍 Revisión del crítico: {hours} · {ACB_OUTCOMES[acb['outcome']]}"
+    with st.expander(label):
+        for it in acb["iterations"]:
+            chosen = " ✅" if it["iteration"] == acb["chosen_iteration"] else ""
+            verdict = it["verdict"] or "sin revisión"
+            st.markdown(
+                f"**Versión {it['iteration']}{chosen}** · {it['total_hours']} h · "
+                f"crítico: {verdict} · boss: {it['decision']}"
+            )
+            for issue in it["issues"]:
+                st.markdown(
+                    f"- **[{issue['severity']}] {issue['category']}**: {issue['problem']} "
+                    f"*{issue['suggestion']}*"
+                )
+        st.caption(f"{acb['llm_calls']} llamadas al LLM en este turno (actor y crítico).")
 
 
 # --- Página ---
@@ -207,6 +249,19 @@ with st.form("turn_form", clear_on_submit=True):
         format_func=DETAIL_LEVEL_LABELS.get,
         horizontal=True,
     )
+    tier_choice = st.selectbox(
+        "Audiencia",
+        [None, Tier.EXECUTIVE, Tier.PM, Tier.DEVELOPER, Tier.DEFAULT],
+        format_func=lambda t: "Automática (se deduce del mensaje)" if t is None else TIER_LABELS[t],
+        help="Para quién es la estimación: cambia el enfoque, no el formato.",
+    )
+    review = st.checkbox(
+        "Revisar con un crítico",
+        help=(
+            "Un segundo modelo revisa la estimación y, si encuentra problemas importantes, se "
+            "rehace con su feedback. Más lento y de 2 a 4 veces más caro."
+        ),
+    )
     submitted = st.form_submit_button("Enviar", type="primary")
 
 if submitted:
@@ -225,7 +280,9 @@ if submitted:
             new_session()
         try:
             with st.spinner("Generando y validando la estimación…"):
-                response, error, seconds = send_turn(request, attachments or [])
+                response, error, seconds = send_turn(
+                    request, attachments or [], tier_choice, review
+                )
         except httpx.HTTPError as e:
             st.error(f"No se puede conectar con la API en {API_URL}: {e}")
         else:
@@ -266,6 +323,23 @@ with memory_box:
             f"Historial: {window['turns']} turno(s); se envían al LLM los últimos "
             f"{window['turns_in_window']} de un máximo de {window['max_turns']}."
         )
+        if window.get("tier"):
+            origin = (
+                "elegida en el formulario"
+                if window["tier_rule"] == "override"
+                else f"regla `{window['tier_rule']}`"
+                + (", mantenida del turno anterior" if window.get("tier_inherited") else "")
+            )
+            st.markdown(f"**Audiencia:** {TIER_LABELS[Tier(window['tier'])]} ({origin})")
+        if window.get("anchors") or window.get("summarized_turns"):
+            st.caption(
+                f"Turnos antiguos: {window.get('anchors', 0)} conservado(s) como ancla "
+                f"(máx. {window.get('max_anchors', 0)}) y {window.get('summarized_turns', 0)} "
+                f"en el resumen (coste {fmt_cost(window.get('compression_cost_usd'))})."
+            )
+        if window.get("conversation_summary"):
+            with st.expander("Resumen de la conversación anterior"):
+                st.write(window["conversation_summary"])
 
 with metrics_box:
     if not st.session_state.turns:
@@ -288,7 +362,17 @@ with prompt_box:
         detail_level=DetailLevel.MEDIUM,
         output_format=OutputFormat.PHASES_TABLE,
     )
-    system_prompt, _ = render_estimation_prompt(preview, PROMPT_VERSION, project_metadata=metadata)
-    st.caption("El del siguiente turno, con la memoria actual (opciones por defecto).")
+    state = st.session_state.window or {}
+    system_prompt, _ = render_estimation_prompt(
+        preview,
+        PROMPT_VERSION,
+        project_metadata=metadata,
+        conversation_summary=state.get("conversation_summary"),
+        tier=state.get("tier") or "default",
+    )
+    st.caption(
+        "El del siguiente turno, con la memoria, el resumen y la audiencia actuales "
+        "(opciones por defecto)."
+    )
     with st.expander(f"Ver ({fmt_int(len(system_prompt))} caracteres)"):
         st.code(system_prompt, language="markdown", wrap_lines=True)

@@ -49,13 +49,16 @@ ui = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Las evals llaman al LLM real (cuestan dinero): fuera por defecto, con `pytest -m eval`
+addopts = "-m 'not eval'"
+markers = ["eval: evals con el golden dataset contra el LLM real (pytest -m eval)"]
 filterwarnings = [
     # Aviso interno de LiteLLM (tipos TypedDict con ReadOnly); no afecta al proyecto
     "ignore:Item .* is using the `ReadOnly` qualifier:UserWarning",
 ]
 
 [tool.coverage.run]
-source = ["app"]
+source = ["app", "evals"]
 
 [tool.coverage.report]
 show_missing = true

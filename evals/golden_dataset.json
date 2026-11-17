@@ -1,0 +1,148 @@
+[
+  {
+    "id": "app_fidelizacion_gimnasio",
+    "turns": [
+      "Una cadena de gimnasios quiere una app móvil para sus socios: registro, check-in en el gimnasio con código QR, puntos por cada visita canjeables por recompensas y notificaciones push con ofertas. Necesitan también un panel de administración web para gestionar recompensas y ver estadísticas de uso."
+    ],
+    "project_type": "mobile_app",
+    "expected": {
+      "hours": [150, 550],
+      "must_mention": [["qr"], ["punto", "recompensa"], ["push", "notificacion"], ["panel", "administracion", "backoffice"]]
+    }
+  },
+  {
+    "id": "saas_reservas_clinicas",
+    "turns": [
+      "Plataforma SaaS de reservas para clínicas de fisioterapia: cada clínica gestiona su agenda y sus fisioterapeutas, los pacientes reservan cita online, reciben recordatorios por SMS y pagan por adelantado con tarjeta. Debe admitir varias clínicas con datos separados."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "hours": [180, 600],
+      "must_mention": [["agenda", "calendario", "reserva", "cita"], ["sms", "recordatorio"], ["pago", "stripe", "tarjeta"], ["multi", "clinicas", "tenant"]]
+    }
+  },
+  {
+    "id": "herramienta_inventario_almacen",
+    "turns": [
+      "Herramienta interna para el almacén de una distribuidora: dar de alta entradas y salidas de material con lectores de código de barras, alertas cuando un producto baja del stock mínimo e informes mensuales de rotación para el equipo de compras."
+    ],
+    "project_type": "internal_tool",
+    "expected": {
+      "hours": [100, 380],
+      "must_mention": [["codigo de barras", "escaner", "lector"], ["stock", "inventario"], ["alerta", "aviso"], ["informe", "reporte", "report"]]
+    }
+  },
+  {
+    "id": "pipeline_ventas_shopify",
+    "turns": [
+      "Pipeline de datos que cada noche extraiga los pedidos de tres tiendas Shopify, los limpie y los cargue en BigQuery, con un dashboard en Looker Studio con ventas por tienda, producto y día."
+    ],
+    "project_type": "data_pipeline",
+    "expected": {
+      "hours": [60, 300],
+      "must_mention": [["shopify"], ["bigquery"], ["dashboard", "looker", "cuadro de mando"], ["etl", "extraccion", "ingesta", "carga"]]
+    }
+  },
+  {
+    "id": "marketplace_artesanos",
+    "turns": [
+      "Marketplace web de productos artesanos: los artesanos publican su catálogo, los compradores pagan en la plataforma y el pago se reparte automáticamente entre el artesano y la comisión del marketplace. Incluye valoraciones de productos y un chat entre comprador y vendedor."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "hours": [300, 1000],
+      "must_mention": [["catalogo", "producto"], ["pago", "comision"], ["valoracion", "resena", "opinion"], ["chat", "mensaje"]]
+    }
+  },
+  {
+    "id": "web_corporativa_simple",
+    "turns": [
+      "Web corporativa sencilla para un despacho de abogados: cinco páginas informativas (inicio, servicios, equipo, blog y contacto) con un formulario de contacto. Sin área privada ni pagos."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "hours": [15, 150],
+      "must_mention": [["formulario", "contacto"], ["blog"]]
+    }
+  },
+  {
+    "id": "fuera_de_alcance_receta",
+    "turns": [
+      "Necesito que me recomiendes una receta de paella de marisco para ocho personas y cuánto tiempo hay que dejarla reposar."
+    ],
+    "expected": {
+      "out_of_scope": true
+    }
+  },
+  {
+    "id": "fuera_de_alcance_reforma",
+    "turns": [
+      "Quiero saber cuánto me costaría reformar la cocina de mi casa: cambiar los muebles, la encimera y poner suelo nuevo."
+    ],
+    "expected": {
+      "out_of_scope": true
+    }
+  },
+  {
+    "id": "tier_direccion_app_comerciales",
+    "turns": [
+      "Para el comité de dirección: app móvil interna para que los comerciales registren sus visitas a clientes, consulten su cartera y vean sus objetivos de venta del mes."
+    ],
+    "project_type": "mobile_app",
+    "expected": {
+      "tier": "executive",
+      "hours": [100, 500],
+      "must_mention": [["visita"], ["cliente", "cartera"], ["objetivo", "venta"]]
+    }
+  },
+  {
+    "id": "tier_tecnico_flotas",
+    "turns": [
+      "Detalla la arquitectura: plataforma de gestión de flotas de vehículos con posición GPS en tiempo real, API REST con microservicios desplegados en Kubernetes y alertas cuando un vehículo sale de su zona."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "tier": "developer",
+      "hours": [250, 1000],
+      "must_mention": [["gps", "geolocalizacion", "tiempo real"], ["kubernetes", "k8s"], ["api"], ["alerta", "geocerca", "zona"]]
+    }
+  },
+  {
+    "id": "tier_pm_portal_empleados",
+    "turns": [
+      "Organízalo en sprints con hitos claros: portal interno de empleados para consultar nóminas, pedir vacaciones con aprobación del responsable y publicar comunicados internos."
+    ],
+    "project_type": "internal_tool",
+    "expected": {
+      "tier": "pm",
+      "hours": [100, 450],
+      "must_mention": [["nomina"], ["vacaciones"], ["comunicado", "noticia"]]
+    }
+  },
+  {
+    "id": "conversacion_academia_crece",
+    "turns": [
+      "Una academia de idiomas quiere una web para que los alumnos se matriculen en los cursos y paguen online con tarjeta.",
+      "Añade también una app móvil para que los alumnos vean su horario de clases y reciban avisos cuando se cancela una clase."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "change": "up",
+      "hours": [180, 900],
+      "must_mention": [["matricula"], ["pago", "tarjeta"], ["app", "movil"], ["horario", "clase"]]
+    }
+  },
+  {
+    "id": "conversacion_hotel_reduce",
+    "turns": [
+      "Un hotel quiere una web con reservas de habitaciones, pago online, un programa de puntos para clientes habituales y un chat con recepción.",
+      "Quita el programa de puntos y el chat: en la primera fase solo reservas y pago online."
+    ],
+    "project_type": "web_saas",
+    "expected": {
+      "change": "down",
+      "hours": [60, 400],
+      "must_mention": [["reserva", "habitacion"], ["pago"]]
+    }
+  }
+]

@@ -23,7 +23,9 @@ estimador-cag/
 │   ├── config.py               # Configuración con Pydantic BaseSettings (.env)
 │   ├── prompts/                # Plantillas de prompt versionadas (Jinja2)
 │   │   ├── loader.py           # render_estimation_prompt(request, version)
-│   │   └── estimation/v1/      # system.j2, user.j2 y examples.j2
+│   │   ├── estimation/v1/      # system.j2, user.j2 y examples.j2
+│   │   ├── conversation_summary/v1/  # Resumen de los turnos que salen de la ventana
+│   │   └── critic/v1/          # El crítico del ciclo Actor-Critic-Boss
 │   ├── guardrails/
 │   │   ├── input.py            # Moderación, prompt injection y datos personales
 │   │   └── output.py           # Deja sin cifras las estimaciones fuera de alcance
@@ -34,9 +36,13 @@ estimador-cag/
 │   │   ├── estimation.py
 │   │   └── health.py
 │   ├── sessions.py             # Estado de las sesiones: historial y memoria del proyecto
+│   ├── tiers.py                # Tier de audiencia (dirección, PM, técnico) de cada turno
 │   ├── services/
 │   │   ├── estimation.py       # Orquestador del pipeline
 │   │   ├── conversation.py     # Un turno de una sesión (memoria + historial + adjuntos)
+│   │   ├── compression.py      # Compresión del historial: anclas y resumen acumulado
+│   │   ├── critic.py           # Crítico: revisa una estimación (Actor-Critic-Boss)
+│   │   ├── boss.py             # Boss: acepta, pide otra versión o se queda con la mejor
 │   │   ├── attachments.py      # Extracción de texto de PDFs y Word
 │   │   ├── llm_client.py       # Wrapper sobre LiteLLM + Instructor (salida estructurada)
 │   │   ├── render.py           # Resultado estructurado -> markdown según el formato
@@ -44,6 +50,11 @@ estimador-cag/
 │   │   └── semantic_cache.py   # Caché semántica (Redis Stack + embeddings)
 │   ├── logging_config.py       # Logs estructurados (structlog)
 │   └── tracing.py              # Trazas del LLM en Arize Phoenix (opcional)
+├── evals/                      # Evals con el LLM real: golden dataset, métricas y runner
+│   ├── golden_dataset.json     # Casos de referencia y lo que se espera de cada uno
+│   ├── dataset.py              # Carga y valida el dataset
+│   ├── metrics.py              # Métricas y umbrales
+│   └── run.py                  # python -m evals.run
 ├── streamlit_app.py            # Cliente Streamlit (formulario)
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
@@ -88,6 +99,9 @@ cp .env.example .env
 | `SEMANTIC_CACHE_THRESHOLD` | Similitud mínima para servir desde la caché semántica | `0.95` |
 | `MODERATION_ENABLED` | Guardrail de moderación de OpenAI (necesita `OPENAI_API_KEY`) | `false` |
 | `SESSION_MAX_TURNS` | Turnos (par user + assistant) del historial que se envían al LLM | `6` |
+| `SESSION_COMPRESSION_ENABLED` | Anclas y resumen de los turnos que salen de la ventana (si no, se descartan) | `true` |
+| `SESSION_MAX_ANCHORS` | Turnos antiguos que se conservan literales como anclas (0 = todo al resumen) | `4` |
+| `ACB_MAX_ITERATIONS` | Vueltas como mucho del ciclo Actor-Critic-Boss (cada una: actor + crítico) | `2` |
 
 Ejemplos de configuración:
 
@@ -169,6 +183,7 @@ Una conversación iterativa sobre un mismo proyecto: el cliente refina el alcanc
 ```
 POST /api/v1/sessions                         -> {"session_id": "..."}
 POST /api/v1/sessions/{session_id}/estimate   (multipart: transcript + attachments + opciones)
+POST /api/v1/sessions/{session_id}/estimate-acb   (lo mismo, revisado por un crítico)
 GET  /api/v1/sessions/{session_id}            -> memoria y turnos de la sesión
 ```
 
@@ -182,10 +197,88 @@ GET  /api/v1/sessions/{session_id}            -> memoria y turnos de la sesión
 | Cómo se usa | Se envían los últimos `SESSION_MAX_TURNS` turnos (ventana deslizante, 6 por defecto) | Se inyecta en el system prompt, en el bloque `<project_metadata>` (vacío en el primer turno) |
 | Qué pasa con lo antiguo | Los turnos más viejos se descartan | Se conserva: el nombre del proyecto no se pierde aunque el turno donde apareció ya no esté en la ventana |
 
-- **Ventana deslizante:** cuando hay más de `SESSION_MAX_TURNS` turnos, se descartan los pares más antiguos. El system prompt no se guarda en el historial: `ConversationHistory.to_messages_list()` lo regenera en cada turno a partir del `project_metadata` actual y devuelve el array `messages` (system + turnos de la ventana), al que el turno añade el mensaje nuevo antes de llamar al LLM. Es la estrategia razonable para empezar: simple, predecible y con un coste por llamada acotado.
+- **Ventana deslizante:** cuando hay más de `SESSION_MAX_TURNS` turnos, se descartan los pares más antiguos. El system prompt no se guarda en el historial: `ConversationHistory.to_messages_list()` lo regenera en cada turno a partir del `project_metadata` actual y devuelve el array `messages` (system + turnos de la ventana), al que el turno añade el mensaje nuevo antes de llamar al LLM. Es la estrategia razonable para empezar: simple, predecible y con un coste por llamada acotado. Lo que sale de la ventana no se pierde: pasa por la compresión (ver más abajo).
+- **Mensajes de continuación:** a partir del segundo turno, el mensaje del usuario no empieza por "Estima el siguiente proyecto:" sino por "Nuevo mensaje sobre el mismo proyecto. Actualiza la estimación completa…", y el system prompt pide mantener el `project_name`. Con el encabezado de siempre, "Añade también una app móvil" se leía como un proyecto nuevo (lo detectaron las evals).
 - **Respuesta del asistente en el historial:** se guarda la estimación en **markdown**, no en JSON. Con respuestas JSON en el historial, el modelo las imita y acaba anidando JSON como texto dentro de la herramienta, y la respuesta deja de validar (lo vimos en las pruebas reales con 3 turnos). El markdown además ocupa la mitad de tokens.
 - **Sin caché:** el endpoint de sesión no usa las cachés, porque la respuesta depende del historial y de la memoria.
 - **Volatilidad aceptada:** las sesiones viven en un diccionario en memoria del proceso. Se pierden al reiniciar el servicio y no se comparten entre réplicas; para producción irían en Redis o en una base de datos.
+
+### Compresión del historial: anclas y resumen acumulado
+
+Con solo una ventana, lo que sale de ella se olvida: si en el turno 1 el cliente dijo que había firmado un NDA o que el presupuesto máximo era de 30.000 €, en el turno 8 el modelo ya no lo sabe (la memoria guarda nombre, equipo, tecnologías y alcance, pero no ese tipo de compromisos). [`app/services/compression.py`](app/services/compression.py) decide qué pasa con cada turno que expulsa la ventana:
+
+1. **Ancla:** si el mensaje del usuario contiene un compromiso duradero, el turno se conserva **literal**, fuera de la ventana. Se detecta con reglas de expresiones regulares en español e inglés: confidencialidad (NDA), contrato o propuesta firmados, alcance cerrado, presupuesto máximo, normativa (RGPD, PCI-DSS, ISO 27001...), fecha límite obligatoria y compromisos explícitos ("hemos acordado", "el cliente ha aceptado"). Cuesta cero, es determinista y explicable (el log `history_compressed` dice qué regla saltó). Es conservadora a propósito: un ancla de más ocupa prompt para siempre; una de menos solo acaba en el resumen.
+2. **Resumen:** el resto de turnos se integra, con una llamada al LLM (prompt versionado [`conversation_summary/v1`](app/prompts/conversation_summary/v1/)), en un **único resumen acumulado**: el resumen anterior más los turnos que salen, reescritos en como mucho 250 palabras.
+
+Lo que recibe el LLM en cada turno:
+
+```
+system  (regenerado: instrucciones + <project_metadata> + <resumen_conversacion>)
+anclas  (turnos antiguos literales, en orden)
+ventana (últimos SESSION_MAX_TURNS turnos)
+user    (mensaje actual)
+```
+
+- **El resumen va en el system prompt**, no como un mensaje más: así se mantiene la alternancia user/assistant, que Anthropic exige, y el system prompt ya se regenera en cada turno.
+- **Límite de anclas** (`SESSION_MAX_ANCHORS`, 4 por defecto): si no caben, la más antigua pasa al resumen, para que el prompt no crezca sin límite.
+- **El resumen es best-effort:** si su llamada falla, se conserva el resumen anterior y el turno del usuario no se ve afectado.
+- **Coste aparte:** la compresión solo llama al LLM cuando un turno normal sale de la ventana (a partir del turno 7 con la configuración por defecto), y con el mismo modelo. Su coste acumulado se devuelve en `session.compression_cost_usd`, separado del `cost_usd` del turno.
+- La detección mira el mensaje completo del usuario, incluidos los adjuntos: un documento que mencione el RGPD convierte el turno en ancla. Es intencionado (es una restricción del proyecto), y el límite de anclas acota lo que eso cuesta.
+- Con `SESSION_COMPRESSION_ENABLED=false` se vuelve a la ventana simple.
+
+El panel lateral de Streamlit muestra cuántos turnos hay como anclas y en el resumen, el resumen actual y su coste.
+
+### Tier de audiencia dinámico
+
+La misma estimación no se cuenta igual a la dirección que al equipo técnico. [`app/tiers.py`](app/tiers.py) decide en cada turno para quién es la respuesta:
+
+| Tier | Para quién | Qué cambia en la respuesta |
+|---|---|---|
+| `executive` | Dirección | El summary empieza por coste, plazo y la decisión; fases sin jerga; riesgos de negocio primero |
+| `pm` | Gestión del proyecto | Plazo, fases en orden, dependencias e hitos; riesgos de planificación primero |
+| `developer` | Equipo técnico | Enfoque técnico y arquitectura; tecnologías concretas; riesgos técnicos primero |
+| `default` | — | Nada: el prompt es el mismo que sin tier |
+
+Cómo se decide, por orden:
+
+1. **Override:** el campo `tier` del formulario (opcional) manda siempre.
+2. **Reglas** sobre el mensaje del usuario, por prioridad: primero las menciones a la audiencia ("para el comité de dirección", "el CTO", "el jefe de proyecto") y después las señales del tema (retorno de la inversión → executive; hitos, sprints, cronograma → pm; Kubernetes, microservicios, endpoints → developer). Así, "para el comité de dirección: ¿cuánto cuesta migrar a Kubernetes?" es executive.
+3. **Herencia:** si el mensaje no da pistas ("quita la descarga de facturas"), se mantiene el tier del turno anterior, para que no cambie de un turno a otro sin motivo.
+4. Si no hay nada: `default`.
+
+- **Sin llamadas al LLM:** cuesta cero, es determinista y **explicable**: el estado de la sesión devuelve `tier`, `tier_rule` (la regla que lo decidió) y `tier_inherited`, y el log `session_turn_completed` también los registra.
+- **Enfoque, no formato:** el bloque `<audiencia>` del system prompt cambia el énfasis y el lenguaje; `output_format` y `detail_level` siguen decidiendo la forma, y las reglas de horas y costes no cambian.
+- **Solo mira el mensaje del usuario:** ni los adjuntos (un documento técnico adjunto no convierte en técnica una conversación con dirección) ni la memoria (siempre tiene tecnologías, así que la regla técnica saltaría siempre).
+- El tier solo se guarda si el turno sale bien. El endpoint sin sesión no lo usa.
+
+En Streamlit hay un selector **Audiencia** (automática por defecto) y el panel lateral muestra el tier y por qué ("Gestión del proyecto (PM) (regla `planificacion`, mantenida del turno anterior)").
+
+### Revisión Actor-Critic-Boss
+
+`POST /api/v1/sessions/{id}/estimate-acb` hace el mismo turno que `/estimate`, pero la estimación pasa por un ciclo de revisión antes de llegar al usuario:
+
+```
+actor (estimador) -> crítico (revisa) -> boss (decide) ─┬─ sin problemas graves       -> acepta
+                                                         ├─ problemas y quedan vueltas -> el actor rehace
+                                                         └─ sin vueltas                -> la mejor versión
+```
+
+- **Actor:** el estimador de siempre. Cuando rehace, recibe en el system prompt (bloque `<revision_critica>`) su estimación anterior y los problemas que encontró el crítico.
+- **Crítico** ([`critic.py`](app/services/critic.py), prompt [`critic/v1`](app/prompts/critic/v1/)): otra llamada al LLM que revisa sin modificar. Ve lo mismo que un revisor humano: el mensaje del usuario con sus adjuntos, la memoria del proyecto, la audiencia y la estimación. Devuelve una `CriticReview`: veredicto (`accept` o `revise`) y problemas concretos (alcance, horas, fases, equipo, riesgos o enfoque) con su gravedad y una sugerencia.
+- **Boss** ([`boss.py`](app/services/boss.py)): decide sin llamar al LLM, así que es determinista y se prueba sin modelo. Solo pide otra versión si el crítico pide revisar y hay problemas de gravedad alta o media (los menores no justifican otra llamada), y como mucho `ACB_MAX_ITERATIONS` vueltas (2). Si se agotan, devuelve la versión con menos problemas graves.
+- **Degradación:** si el crítico falla, se devuelve la estimación sin revisar; si falla la nueva versión del actor, la mejor anterior. El ciclo no rompe el turno.
+- **Respuesta:** la de `/estimate` más `acb`, la traza: cada versión con sus horas, lo que dijo el crítico y lo que decidió el boss. `usage` y `cost_usd` suman todas las llamadas del turno. En el historial solo queda la versión final.
+
+**¿Merece la pena?** Lo dicen las evals ([`--mode acb`](#evals-el-golden-dataset)). Con `gpt-4o-mini` como actor y crítico:
+
+| | Normal | ACB |
+|---|---|---|
+| `hours_in_range` | 0,82 | 1,00 |
+| `content_recall` | 0,95 | 1,00 |
+| Coste de la suite | 0,011 $ | 0,044 $ (×4) |
+| Tiempo | 41 s | 131 s (×3) |
+
+El crítico corrige sobre todo las estimaciones cortas de los proyectos grandes (el marketplace pasa de 260 a 540 h). Pero tiende a subir las horas casi siempre: con la primera versión de su prompt inflaba los proyectos pequeños (la web corporativa, de 100 a 170 h) y marcaba como error que una receta de paella saliera "fuera de alcance"; el prompt actual se lo aclara. Son una o dos ejecuciones por modo, así que conviene repetirlas antes de dar la mejora por buena, y probar con otro modelo como crítico. Por coste y latencia es opcional: en Streamlit, casilla **Revisar con un crítico**, y la traza en un desplegable bajo la respuesta.
 
 ### Cómo se extrae el `project_metadata`
 
@@ -207,7 +300,6 @@ Por qué el camino B y no subir el archivo al LLM (camino A):
 - A cambio, se pierden las imágenes y los diagramas, y un PDF escaneado no aporta texto (se indica en el prompt).
 
 ## Pipeline de estimación
-## Pipeline de estimación
 
 [`app/services/estimation.py`](app/services/estimation.py) orquesta cada petición; el router solo traduce los errores a códigos HTTP:
 
@@ -228,13 +320,15 @@ Los guardrails van antes que las cachés: una descripción con datos personales 
 
 El LLM no devuelve texto libre sino un objeto `EstimationResult` ([`schemas/estimation.py`](app/schemas/estimation.py)): `project_name`, `summary`, `confidence_pct`, `phases` (nombre, horas, coste, semanas, resumen y asunciones), `team`, `risks` y los totales.
 
-Pydantic valida **reglas de negocio** que el modelo no puede saltarse:
+**La aritmética la hace el código, no el modelo.** El coste de cada fase (`cost_eur = hours × 50`) y los totales (`total_hours`, `total_cost_eur`) son **campos calculados** (`computed_field`): salen en el JSON de la respuesta, pero no están en el esquema que recibe el modelo, así que no tiene que calcularlos. Antes se le pedía sumar y un validador lo comprobaba, pero las [evals](#evals-el-golden-dataset) mostraron que `gpt-4o-mini` fallaba la suma en 2 de 13 casos incluso tras los reintentos, y el turno acababa en error. La duración total sí la da el modelo: las fases pueden solaparse.
 
-- En cada fase, `cost_eur = hours × 50` (tarifa de 50 €/h).
-- `total_hours` y `total_cost_eur` son la suma de las fases.
+Pydantic valida las **reglas de negocio** que dependen del criterio del modelo:
+
 - Si `confidence_pct < 30`, el `summary` debe empezar por `"Fuera de alcance:"`.
+- Una estimación dentro de alcance tiene al menos 2 fases. Las evals detectaron que `gpt-4o-mini` a veces corta la lista y devuelve solo la primera fase (32 h para un proyecto de 300); con el validador se le pide que la complete.
+- Los límites de cada campo (horas por fase, número de fases, longitud de los textos...).
 
-[Instructor](https://python.useinstructor.com/) envía el esquema al modelo como herramienta y, si un validador falla, le devuelve el error para que lo corrija (hasta 2 reintentos; se registra `llm_response_retried`). Las fases van antes que los totales en el esquema para que el modelo fije primero las cifras de cada fase y luego las sume.
+[Instructor](https://python.useinstructor.com/) envía el esquema al modelo como herramienta y, si un validador falla, le devuelve el error para que lo corrija (hasta 2 reintentos; se registra `llm_response_retried`).
 
 El campo `text` de la respuesta es el markdown generado a partir del objeto según el `output_format` ([`render.py`](app/services/render.py)): tabla por fases, lista de tareas o texto narrativo.
 
@@ -261,11 +355,15 @@ Los prompts son plantillas Jinja2 en [`app/prompts/`](app/prompts/), con la estr
 ```
 app/prompts/
 ├── loader.py
-└── estimation/
-    └── v1/
-        ├── system.j2     # rol, instrucciones y bloques condicionales; incluye examples.j2
-        ├── user.j2       # envuelve la descripción del proyecto
-        └── examples.j2   # 3 estimaciones de ejemplo (few-shot): el contexto CAG
+├── estimation/
+│   └── v1/
+│       ├── system.j2     # rol, instrucciones y bloques condicionales; incluye examples.j2
+│       ├── user.j2       # envuelve la descripción del proyecto
+│       └── examples.j2   # 3 estimaciones de ejemplo (few-shot): el contexto CAG
+└── conversation_summary/
+    └── v1/               # resumen acumulado de los turnos que salen de la ventana
+        ├── system.j2
+        └── user.j2
 ```
 
 - **`system.j2`**: rol del modelo e instrucciones generales, y **bloques condicionales** (`{% if %}`) según `project_type`, `output_format` y `detail_level`: solo se incluyen las instrucciones de las opciones elegidas. Añade los ejemplos con `{% include %}`.
@@ -418,7 +516,7 @@ Devuelve el estado del servicio y la configuración activa.
 
 Los tests simulan la llamada al LLM, así que no necesitan API key ni consumen tokens.
 
-Los tests de las sesiones (Paso 7 del ejercicio de la sesión 05) están en [`tests/test_sessions_api.py`](tests/test_sessions_api.py), con `httpx.AsyncClient` sobre la app: dos turnos que actualizan el `project_metadata`, un PDF adjunto que cambia la estimación y 8 turnos en los que lo enviado al LLM nunca supera la ventana de `SESSION_MAX_TURNS`.
+Los tests de las sesiones (Paso 7 del ejercicio de la sesión 05) están en [`tests/test_sessions_api.py`](tests/test_sessions_api.py), con `httpx.AsyncClient` sobre la app: dos turnos que actualizan el `project_metadata`, un PDF adjunto que cambia la estimación y 8 turnos en los que lo enviado al LLM nunca supera la ventana de `SESSION_MAX_TURNS`. Los de la compresión están en [`tests/test_compression.py`](tests/test_compression.py): reglas de anclaje (positivos y negativos), el límite de anclas, el resumen (y qué pasa si falla) y una conversación de 9 turnos en la que el ancla y el resumen llegan al LLM. Los del tier, en [`tests/test_tiers.py`](tests/test_tiers.py): cada regla, la prioridad, el override, la herencia, el bloque del prompt y una conversación en la que el tier se deduce, se hereda y se fuerza. Los del ciclo Actor-Critic-Boss, en [`tests/test_acb.py`](tests/test_acb.py): cada decisión del boss (aceptar, rehacer, agotar vueltas, empates, fallos del crítico y del actor), el crítico, los prompts y el endpoint.
 
 ```bash
 uv run pytest tests/test_sessions_api.py -v   # solo los de sesiones
@@ -429,6 +527,46 @@ uv run pytest --cov          # tests con cobertura (mínimo 80 %)
 uv run ruff check .          # lint
 uv run ruff format .         # formatear el código
 ```
+
+## Evals: el golden dataset
+
+Los tests comprueban que el código hace lo que debe, pero simulan el LLM: no dicen si el modelo estima bien. Las evals sí: lanzan un **golden dataset** de casos de referencia contra la API con el **LLM real** y puntúan las respuestas.
+
+**El dataset** ([`evals/golden_dataset.json`](evals/golden_dataset.json)) tiene 13 casos: los cuatro tipos de proyecto, dos peticiones fuera de alcance (una receta, una reforma de cocina), tres con señales de audiencia (dirección, PM, técnico) y dos conversaciones de dos turnos (una que amplía el alcance y otra que lo reduce). Cada caso se envía a una sesión nueva, turno a turno, y define lo que se espera del último:
+
+- `hours`: rango de horas razonable. Es amplio a propósito: busca estimaciones disparatadas, no la cifra exacta.
+- `must_mention`: conceptos que deben aparecer, cada uno con sus sinónimos (sin distinguir mayúsculas ni tildes).
+- `out_of_scope`, `tier` y `change` (si las horas deben subir o bajar).
+
+**Métricas y umbrales** ([`evals/metrics.py`](evals/metrics.py)):
+
+| Métrica | Qué mide | Umbral |
+|---|---|---|
+| `schema` | Todos los turnos devuelven un `EstimationResult` válido | 100 % |
+| `scope` | Fuera de alcance cuando toca (y sin cifras), y solo entonces | 100 % |
+| `tier` | La audiencia deducida es la esperada | 100 % |
+| `memory` | El `project_name` se mantiene entre turnos | 100 % |
+| `hours_in_range` | Las horas caen en el rango esperado | 70 % |
+| `content_recall` | Proporción de conceptos esperados que aparecen | 70 % |
+| `direction` | Las horas suben o bajan como se pidió | 50 % |
+
+Lo que depende del contrato exige el 100 %; lo que depende del criterio del modelo tiene margen. La coherencia de los números no se mide: la calcula el código, no el modelo.
+
+**Cómo se lanza** (cuesta dinero: con `gpt-4o-mini`, unos 0,01 $ la suite completa):
+
+```bash
+uv run python -m evals.run                                  # todos los casos, app en proceso
+uv run python -m evals.run --case tier_tecnico_flotas       # solo algunos (se puede repetir)
+uv run python -m evals.run --http http://localhost:8000     # contra la API levantada
+uv run python -m evals.run --mode acb                       # con el ciclo Actor-Critic-Boss
+LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini uv run python -m evals.run   # otro modelo
+
+uv run pytest -m eval -s                                    # lo mismo, como test de pytest
+```
+
+Imprime una tabla por caso (con el detalle de lo que falla) y el resumen por métrica, y guarda el informe completo en `evals/reports/` (ignorado por git) para comparar ejecuciones. Sale con código 1 si alguna métrica queda por debajo de su umbral, así que sirve como **puerta de regresión** antes de cambiar un prompt o un modelo.
+
+En pytest está marcado como `eval` y **excluido por defecto** (`addopts = "-m 'not eval'"`): `uv run pytest` y la CI no llaman al LLM. El código de las evals (dataset, métricas y runner) sí tiene sus tests normales, con el LLM simulado, en [`tests/test_evals.py`](tests/test_evals.py).
 
 ## Integración continua
 

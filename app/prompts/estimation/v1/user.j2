@@ -1,4 +1,8 @@
+{% if project_metadata %}
+Nuevo mensaje sobre el mismo proyecto. Actualiza la estimación completa del proyecto con lo que pide (no estimes solo el cambio):
+{% else %}
 Estima el siguiente proyecto:
+{% endif %}
 
 <descripcion_proyecto>
 {{ description }}

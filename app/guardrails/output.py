@@ -20,7 +20,6 @@ log = structlog.get_logger(module=__name__)
 PLACEHOLDER_PHASE = Phase(
     name="Sin estimar",
     hours=0,
-    cost_eur=0,
     duration_weeks=1,
     summary="No se puede dimensionar sin más información.",
 )
@@ -45,7 +44,5 @@ def enforce_scope(result: EstimationResult) -> EstimationResult:
         phases=[PLACEHOLDER_PHASE],
         team=[],
         risks=result.risks,
-        total_hours=0,
-        total_cost_eur=0,
         total_duration_weeks=1,
     )

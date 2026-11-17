@@ -184,3 +184,19 @@ def test_strict_undefined_rejects_missing_variables(tmp_path, monkeypatch):
 
     with pytest.raises(UndefinedError):
         render_estimation_prompt(make_request(), version="v3")
+
+
+def test_follow_up_messages_ask_for_the_complete_estimate():
+    from app.sessions import ProjectMetadata
+
+    request = make_request()
+    _, first = render_estimation_prompt(request, "v1")
+    system, follow_up = render_estimation_prompt(
+        request, "v1", project_metadata=ProjectMetadata(project_name="Reservas")
+    )
+
+    assert first.startswith("Estima el siguiente proyecto:")
+    assert follow_up.startswith("Nuevo mensaje sobre el mismo proyecto.")
+    assert "no estimes solo el cambio" in follow_up
+    assert "mantén el mismo project_name" in system
+    assert "mantén el mismo project_name" not in render_estimation_prompt(request, "v1")[0]

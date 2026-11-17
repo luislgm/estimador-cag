@@ -5,6 +5,8 @@ Estructura en disco: app/prompts/<caso_de_uso>/<versión>/<rol>.j2
     estimation/v1/system.j2    rol, instrucciones y bloques según el formulario
     estimation/v1/user.j2      la descripción del proyecto
     estimation/v1/examples.j2  estimaciones de ejemplo (few-shot), incluidas en system.j2
+    conversation_summary/v1/   resumen acumulado de los turnos que salen de la ventana
+    critic/v1/                 el crítico del ciclo Actor-Critic-Boss
 
 Para crear una versión nueva se copia la carpeta (v1 -> v2), se edita y se pasa
 version="v2": el resto del código no cambia.
@@ -35,12 +37,22 @@ def render_estimation_prompt(
     *,
     project_metadata: Any = None,
     attachments: Sequence[Any] = (),
+    conversation_summary: str | None = None,
+    tier: str = "default",
+    critic_feedback: Sequence[Any] = (),
+    previous_estimate: str | None = None,
 ) -> tuple[str, str]:
     """Devuelve (system, user) listos para enviar al modelo.
 
     - project_metadata: memoria de la sesión (ProjectMetadata). Si falta o está vacía, el
       bloque <project_metadata> del system prompt queda vacío.
     - attachments: adjuntos con `filename` y `text`, que se añaden al mensaje del usuario.
+    - conversation_summary: resumen de los turnos que ya salieron de la ventana; si lo hay,
+      se añade al system prompt.
+    - tier: audiencia (executive, pm, developer o default). Con default no se añade el bloque
+      <audiencia>, así que el prompt es el mismo que sin sesión.
+    - critic_feedback y previous_estimate: en el ciclo Actor-Critic-Boss, los problemas que
+      encontró el crítico y la estimación anterior (markdown), para que el actor la rehaga.
     """
     if project_metadata is not None and project_metadata.is_empty():
         project_metadata = None
@@ -52,9 +64,46 @@ def render_estimation_prompt(
         "output_format": request.output_format.value,
         "project_metadata": project_metadata,
         "attachments": list(attachments),
+        "conversation_summary": conversation_summary,
+        "tier": str(tier),
+        "critic_feedback": list(critic_feedback),
+        "previous_estimate": previous_estimate,
     }
     system = _env.get_template(f"estimation/{version}/system.j2").render(context)
     user = _env.get_template(f"estimation/{version}/user.j2").render(context)
+    return system.strip(), user.strip()
+
+
+def render_summary_prompt(
+    previous_summary: str | None, turns: Sequence[Any], version: str = "v1"
+) -> tuple[str, str]:
+    """(system, user) para actualizar el resumen acumulado con los turnos (`user` y
+    `assistant`) que acaban de salir de la ventana."""
+    context = {"previous_summary": previous_summary, "turns": list(turns)}
+    system = _env.get_template(f"conversation_summary/{version}/system.j2").render(context)
+    user = _env.get_template(f"conversation_summary/{version}/user.j2").render(context)
+    return system.strip(), user.strip()
+
+
+def render_critic_prompt(
+    user_message: str,
+    estimate: Any,
+    *,
+    project_metadata: Any = None,
+    tier: str = "default",
+    version: str = "v1",
+) -> tuple[str, str]:
+    """(system, user) para que el crítico revise una estimación (EstimationResult)."""
+    if project_metadata is not None and project_metadata.is_empty():
+        project_metadata = None
+    context = {
+        "user_message": user_message,
+        "estimate_json": estimate.model_dump_json(indent=2),
+        "project_metadata": project_metadata,
+        "tier": str(tier),
+    }
+    system = _env.get_template(f"critic/{version}/system.j2").render(context)
+    user = _env.get_template(f"critic/{version}/user.j2").render(context)
     return system.strip(), user.strip()
 
 

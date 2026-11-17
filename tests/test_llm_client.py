@@ -11,7 +11,8 @@ from app.services import llm_client
 from tests.factories import make_result, tool_call_response
 
 VALID = make_result().model_dump(mode="json")
-WRONG_TOTAL = VALID | {"total_cost_eur": 9999}
+# Confianza baja sin declararlo "Fuera de alcance": no pasa el validador
+LOW_CONFIDENCE = VALID | {"confidence_pct": 10}
 
 
 class FakeLLM:
@@ -81,13 +82,13 @@ async def test_sends_system_and_user_separately_with_the_schema_as_tool():
 
 
 async def test_retries_with_the_validation_error_and_adds_up_tokens():
-    fake = FakeLLM(WRONG_TOTAL, VALID)
+    fake = FakeLLM(LOW_CONFIDENCE, VALID)
     with capture_logs() as logs:
         result, info = await complete(fake)
 
     assert len(fake.calls) == 2
     retry_messages = str(fake.calls[1]["messages"])
-    assert "total_cost_eur es 9999" in retry_messages  # el modelo recibe el error
+    assert "debe empezar por" in retry_messages  # el modelo recibe el error
     assert result.total_cost_eur == 4000
     assert info.attempts == 2
     assert (info.input_tokens, info.output_tokens) == (2000, 400)  # los dos intentos
@@ -95,7 +96,7 @@ async def test_retries_with_the_validation_error_and_adds_up_tokens():
 
 
 async def test_fails_after_max_retries():
-    fake = FakeLLM(WRONG_TOTAL)  # siempre mal
+    fake = FakeLLM(LOW_CONFIDENCE)  # siempre mal
     with (
         capture_logs() as logs,
         pytest.raises(llm_client.LLMError, match="no pasó las validaciones"),

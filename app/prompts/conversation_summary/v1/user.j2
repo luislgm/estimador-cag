@@ -1,0 +1,15 @@
+<resumen_anterior>
+{{ previous_summary or "(vacío: es el primer resumen)" }}
+</resumen_anterior>
+
+<turnos_que_salen>
+{% for turn in turns %}
+--- turno ---
+Usuario:
+{{ turn.user }}
+
+Asistente:
+{{ turn.assistant }}
+
+{% endfor %}
+</turnos_que_salen>

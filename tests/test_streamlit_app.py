@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from app.schemas.estimation import DetailLevel, OutputFormat, ProjectType  # noqa: E402
 from app.services.render import render_markdown  # noqa: E402
+from app.tiers import Tier  # noqa: E402
 from tests.factories import make_phase, make_request, make_result  # noqa: E402
 
 APP_FILE = str(Path(__file__).parent.parent / "streamlit_app.py")
@@ -37,6 +38,8 @@ class FakeApi:
         self.error_body = None
         self.result = make_result(project_name="App autoescuelas", team_size=3)
         self.connection_error = False
+        self.session_extra = {}  # campos extra del estado de la sesión (tier, compresión...)
+        self.acb = None  # traza del ciclo Actor-Critic-Boss, si la respuesta la trae
 
     def get(self, url, **kwargs):
         if self.health is None:
@@ -50,6 +53,7 @@ class FakeApi:
             self.sessions_created += 1
             return httpx.Response(201, json={"session_id": f"sesion-{self.sessions_created}"})
         self.turn_requests.append((url, data, files))
+        self.last_url = url
         if self.status_code != 200:
             return httpx.Response(self.status_code, json=self.error_body)
         turn = len(self.turn_requests)
@@ -80,8 +84,10 @@ class FakeApi:
                     "mentioned_technologies": ["Flutter", "PostgreSQL"],
                     "agreed_scope": result.summary,
                 },
+                **self.session_extra,
             },
             "attachments": [],
+            **({"acb": self.acb} if self.acb else {}),
         }
 
 
@@ -267,3 +273,109 @@ def test_examples_are_shown(api):
     at = run_app()
 
     assert render_examples("v1") in [c.value for c in at.sidebar.code]
+
+
+def test_audience_selector_is_automatic_by_default(api):
+    at = send(run_app())
+
+    assert at.selectbox[2].label == "Audiencia"
+    assert at.selectbox[2].options[0] == "Automática (se deduce del mensaje)"
+    assert "tier" not in api.turn_requests[0][1]  # la API lo deduce
+
+
+def test_chosen_audience_is_sent(api):
+    at = run_app()
+    at.selectbox[2].set_value(Tier.EXECUTIVE)
+    send(at)
+
+    assert api.turn_requests[0][1]["tier"] == "executive"
+
+
+def test_sidebar_shows_the_audience_and_why(api):
+    api.session_extra = {"tier": "pm", "tier_rule": "planificacion", "tier_inherited": True}
+
+    at = send(run_app())
+
+    text = sidebar_text(at)
+    assert "**Audiencia:** Gestión del proyecto (PM)" in text
+    assert "regla `planificacion`, mantenida del turno anterior" in text
+    system = next(c.value for c in at.sidebar.code if c.value.startswith("Eres un estimador"))
+    assert "quien gestiona el proyecto" in system
+
+
+def test_sidebar_shows_an_override(api):
+    api.session_extra = {"tier": "developer", "tier_rule": "override", "tier_inherited": False}
+
+    text = sidebar_text(send(run_app()))
+
+    assert "**Audiencia:** Equipo técnico (elegida en el formulario)" in text
+
+
+def test_sidebar_shows_anchors_and_summary(api):
+    api.session_extra = {
+        "anchors": 1,
+        "max_anchors": 4,
+        "summarized_turns": 2,
+        "conversation_summary": "Se pidió un portal B2B; luego se añadió la app.",
+        "compression_cost_usd": 0.004,
+    }
+
+    at = send(run_app())
+
+    assert "1 conservado(s) como ancla (máx. 4) y 2 en el resumen" in sidebar_text(at)
+    assert "Se pidió un portal B2B; luego se añadió la app." in [
+        m.value for m in at.sidebar.markdown
+    ]
+    system = next(c.value for c in at.sidebar.code if c.value.startswith("Eres un estimador"))
+    assert "<resumen_conversacion>" in system
+
+
+ACB_TRACE = {
+    "iterations": [
+        {
+            "iteration": 1,
+            "total_hours": 100,
+            "verdict": "revise",
+            "issues": [
+                {
+                    "category": "horas",
+                    "severity": "alta",
+                    "problem": "Pagos con solo 8 h.",
+                    "suggestion": "Súbelo a 40 h.",
+                }
+            ],
+            "decision": "revise",
+        },
+        {
+            "iteration": 2,
+            "total_hours": 140,
+            "verdict": "accept",
+            "issues": [],
+            "decision": "accept",
+        },
+    ],
+    "outcome": "accepted",
+    "chosen_iteration": 2,
+    "llm_calls": 4,
+}
+
+
+def test_review_checkbox_uses_the_acb_endpoint(api):
+    at = run_app()
+    assert at.checkbox[0].label == "Revisar con un crítico"
+    at.checkbox[0].check()
+    send(at)
+
+    assert api.turn_requests[0][0] == f"{API}/sesion-1/estimate-acb"
+
+
+def test_review_trace_is_shown(api):
+    api.acb = ACB_TRACE
+
+    at = send(run_app())
+
+    expander = next(e for e in at.expander if e.label.startswith("🔍 Revisión del crítico"))
+    assert expander.label == "🔍 Revisión del crítico: 100 h → 140 h · aceptada por el crítico"
+    text = "\n".join(m.value for m in expander.markdown)
+    assert "**Versión 2 ✅** · 140 h · crítico: accept · boss: accept" in text
+    assert "**[alta] horas**: Pagos con solo 8 h. *Súbelo a 40 h.*" in text

@@ -41,6 +41,14 @@ class Settings(BaseSettings):
 
     # Sesiones conversacionales: turnos (par user + assistant) que se envían al LLM
     session_max_turns: int = Field(default=6, ge=1, le=50)
+    # Compresión de los turnos que salen de la ventana: los que contienen un compromiso (NDA,
+    # contrato, alcance cerrado...) se conservan literales como anclas, como mucho
+    # SESSION_MAX_ANCHORS; el resto se resume con el LLM. Desactivada, solo hay ventana.
+    session_compression_enabled: bool = True
+    session_max_anchors: int = Field(default=4, ge=0, le=20)
+    # Ciclo Actor-Critic-Boss (POST /sessions/{id}/estimate-acb): vueltas como mucho, cada una
+    # con una estimación del actor y una revisión del crítico
+    acb_max_iterations: int = Field(default=2, ge=1, le=4)
 
     # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
     phoenix_collector_endpoint: str | None = None

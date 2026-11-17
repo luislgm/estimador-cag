@@ -1,0 +1,22 @@
+<memoria_proyecto>
+{% if project_metadata %}
+{% if project_metadata.project_name %}
+- Nombre del proyecto: {{ project_metadata.project_name }}
+{% endif %}
+{% if project_metadata.agreed_scope %}
+- Alcance acordado en turnos anteriores: {{ project_metadata.agreed_scope }}
+{% endif %}
+{% else %}
+(primer mensaje de la conversación)
+{% endif %}
+</memoria_proyecto>
+
+<audiencia>{{ tier }}</audiencia>
+
+<mensaje_usuario>
+{{ user_message }}
+</mensaje_usuario>
+
+<estimacion>
+{{ estimate_json }}
+</estimacion>

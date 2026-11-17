@@ -33,7 +33,7 @@ def test_to_messages_list_always_starts_with_the_system_prompt():
     for i in range(4):
         history.add_turn(f"u{i}", f"a{i}")
 
-    messages = history.to_messages_list(ProjectMetadata(), lambda m: "SYSTEM")
+    messages = history.to_messages_list(ProjectMetadata(), lambda m, s: "SYSTEM")
 
     assert messages[0] == {"role": "system", "content": "SYSTEM"}
     assert [m["role"] for m in messages[1:]] == ["user", "assistant", "user", "assistant"]
@@ -46,7 +46,7 @@ def test_to_messages_list_regenerates_the_system_prompt_from_the_current_metadat
     history.add_turn("u1", "a1")  # u0 ya ha salido de la ventana
     metadata = ProjectMetadata(project_name="Portal B2B", assumed_team_size=3)
 
-    def build_system(m: ProjectMetadata) -> str:
+    def build_system(m: ProjectMetadata, summary: str | None) -> str:
         return f"Proyecto: {m.project_name}, equipo de {m.assumed_team_size}"
 
     first = history.to_messages_list(ProjectMetadata(), build_system)
@@ -62,7 +62,7 @@ def test_to_messages_list_regenerates_the_system_prompt_from_the_current_metadat
 def test_empty_history():
     history = ConversationHistory(max_turns=6)
 
-    assert history.to_messages_list(ProjectMetadata(), lambda m: "SYSTEM") == [
+    assert history.to_messages_list(ProjectMetadata(), lambda m, s: "SYSTEM") == [
         {"role": "system", "content": "SYSTEM"}
     ]
     assert len(history) == 0

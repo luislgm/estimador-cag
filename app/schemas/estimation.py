@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class ProjectType(str, Enum):
@@ -50,37 +50,40 @@ class EstimationRequest(BaseModel):
 HOURLY_RATE_EUR = 50
 OUT_OF_SCOPE_PREFIX = "Fuera de alcance:"
 LOW_CONFIDENCE_THRESHOLD = 30
+MIN_PHASES = 2  # mínimo de fases de una estimación dentro de alcance
 
 
 class Phase(BaseModel):
-    """Una fase del plan de trabajo."""
+    """Una fase del plan de trabajo.
+
+    El coste no lo da el modelo: se calcula (horas × tarifa). Es un computed_field, así que
+    sale en el JSON de la respuesta pero no está en el esquema que se envía al LLM.
+    """
 
     name: str = Field(..., min_length=1, max_length=80, description="Nombre de la fase")
     hours: int = Field(..., ge=0, le=5000, description="Horas de trabajo de la fase")
-    cost_eur: int = Field(..., ge=0, le=250_000, description=f"Coste: horas × {HOURLY_RATE_EUR}")
     duration_weeks: int = Field(..., ge=1, le=52, description="Semanas de calendario")
     summary: str = Field(..., min_length=5, max_length=600, description="Qué se hace en la fase")
     assumptions: list[str] = Field(
         default_factory=list, description="Asunciones de la fase (obligatorias en 'detailed')"
     )
 
-    @model_validator(mode="after")
-    def cost_matches_rate(self) -> "Phase":
-        expected = self.hours * HOURLY_RATE_EUR
-        if self.cost_eur != expected:
-            raise ValueError(
-                f"la fase '{self.name}' cuesta {self.cost_eur} € pero tiene {self.hours} h: "
-                f"a {HOURLY_RATE_EUR} €/h deberían ser {expected} €"
-            )
-        return self
+    @computed_field(description=f"Coste: horas × {HOURLY_RATE_EUR} €/h")
+    @property
+    def cost_eur(self) -> int:
+        return self.hours * HOURLY_RATE_EUR
 
 
 class EstimationResult(BaseModel):
     """Estimación estructurada. Los validadores son reglas de negocio que el LLM no puede
     saltarse: si una falla, Instructor le devuelve el error y le pide que la corrija.
 
-    El orden de los campos es deliberado: las fases van antes que los totales para que el
-    modelo fije primero las cifras de cada fase y después solo tenga que sumarlas.
+    La aritmética no se le pide al modelo: el coste de cada fase y los totales de horas y de
+    coste se calculan a partir de las fases (computed_field). Antes se le pedía sumar y un
+    validador lo comprobaba, pero las evals mostraron que los modelos pequeños fallan la suma
+    (gpt-4o-mini, 2 de 13 casos, incluso tras los reintentos) y el turno acababa en error.
+    Sumar es lo que el código hace bien. La duración total sí la da el modelo: las fases
+    pueden solaparse, así que no es una suma.
     """
 
     project_name: str = Field(..., min_length=3, max_length=120, description="Nombre corto")
@@ -93,22 +96,31 @@ class EstimationResult(BaseModel):
         default_factory=list, description="Tecnologías mencionadas en la conversación o asumidas"
     )
     risks: list[str] = Field(default_factory=list, description="Riesgos principales")
-    total_hours: int = Field(..., ge=0, le=50_000, description="Suma de las horas de las fases")
-    total_cost_eur: int = Field(..., ge=0, le=2_500_000, description="Suma de los costes")
-    total_duration_weeks: int = Field(..., ge=1, le=104, description="Duración total (semanas)")
+    total_duration_weeks: int = Field(
+        ..., ge=1, le=104, description="Duración total en semanas de calendario"
+    )
 
     @model_validator(mode="after")
-    def totals_match_phases(self) -> "EstimationResult":
-        hours = sum(p.hours for p in self.phases)
-        cost = sum(p.cost_eur for p in self.phases)
-        errors = []
-        if hours != self.total_hours:
-            errors.append(f"las fases suman {hours} h pero total_hours es {self.total_hours}")
-        if cost != self.total_cost_eur:
-            errors.append(f"las fases suman {cost} € pero total_cost_eur es {self.total_cost_eur}")
-        if errors:
-            raise ValueError("; ".join(errors) + ". Calcula los totales sumando las fases.")
+    def estimate_has_several_phases(self) -> "EstimationResult":
+        # Una estimación real tiene varias fases (el prompt pide de 3 a más de 10 según el nivel
+        # de detalle). Las evals detectaron que gpt-4o-mini a veces corta la lista y devuelve
+        # solo la primera fase; con este validador se le pide que la complete.
+        if not self.out_of_scope and len(self.phases) < MIN_PHASES:
+            raise ValueError(
+                f"una estimación necesita al menos {MIN_PHASES} fases y solo hay "
+                f"{len(self.phases)}: devuelve todas las fases del proyecto completo"
+            )
         return self
+
+    @computed_field(description="Suma de las horas de las fases")
+    @property
+    def total_hours(self) -> int:
+        return sum(p.hours for p in self.phases)
+
+    @computed_field(description="Suma de los costes de las fases")
+    @property
+    def total_cost_eur(self) -> int:
+        return sum(p.cost_eur for p in self.phases)
 
     @model_validator(mode="after")
     def low_confidence_is_declared(self) -> "EstimationResult":

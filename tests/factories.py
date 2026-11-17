@@ -27,7 +27,6 @@ def make_phase(name="Desarrollo", hours=40, **changes) -> Phase:
     fields = {
         "name": name,
         "hours": hours,
-        "cost_eur": hours * 50,
         "duration_weeks": 2,
         "summary": f"Trabajo de {name.lower()}.",
     }
@@ -35,7 +34,8 @@ def make_phase(name="Desarrollo", hours=40, **changes) -> Phase:
 
 
 def make_result(phases=None, **changes) -> EstimationResult:
-    phases = phases or [make_phase("Diseño", 20), make_phase("Desarrollo", 60)]
+    if phases is None:
+        phases = [make_phase("Diseño", 20), make_phase("Desarrollo", 60)]
     fields = {
         "project_name": "Reservas para restaurante",
         "summary": "Web de reservas con pago online y panel para el personal.",
@@ -43,8 +43,6 @@ def make_result(phases=None, **changes) -> EstimationResult:
         "phases": phases,
         "team": ["1 desarrollador full-stack", "1 diseñador (part-time)"],
         "risks": ["Integración con la pasarela de pago"],
-        "total_hours": sum(p.hours for p in phases),
-        "total_cost_eur": sum(p.cost_eur for p in phases),
         "total_duration_weeks": 4,
     }
     return EstimationResult(**fields | changes)
@@ -63,7 +61,9 @@ def make_info(**changes) -> LLMCallInfo:
     return LLMCallInfo(**fields | changes)
 
 
-def tool_call_response(payload: dict, prompt_tokens=1000, completion_tokens=200):
+def tool_call_response(
+    payload: dict, prompt_tokens=1000, completion_tokens=200, name="EstimationResult"
+):
     """Respuesta de LiteLLM con una llamada a la herramienta de Instructor (sin red)."""
     return litellm.ModelResponse(
         model="claude-haiku-4-5",
@@ -79,7 +79,7 @@ def tool_call_response(payload: dict, prompt_tokens=1000, completion_tokens=200)
                             "id": "call_1",
                             "type": "function",
                             "function": {
-                                "name": "EstimationResult",
+                                "name": name,
                                 "arguments": json.dumps(payload, ensure_ascii=False),
                             },
                         }

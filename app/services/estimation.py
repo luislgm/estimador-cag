@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.guardrails.input import check_input
 from app.guardrails.output import enforce_scope
 from app.prompts import PROMPT_VERSION, render_estimation_prompt
+from app.schemas.critic import ACBTrace
 from app.schemas.estimation import EstimationRequest, EstimationResult
 from app.services import llm_client
 from app.services.cache import EstimationCache, get_cache
@@ -42,6 +43,7 @@ class EstimationOutcome:
     info: LLMCallInfo
     prompt_version: str = PROMPT_VERSION
     cache_kind: str | None = None  # "exact", "semantic" o None si se ha llamado al LLM
+    acb: ACBTrace | None = None  # traza del ciclo Actor-Critic-Boss, si se ha usado
 
     @property
     def cache_hit(self) -> bool:
