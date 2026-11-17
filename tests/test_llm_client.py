@@ -148,3 +148,13 @@ def test_truncated_property():
 
     assert make_info(finish_reason="length").truncated
     assert not make_info().truncated
+
+
+async def test_truncated_output_becomes_llm_error():
+    from instructor.core import IncompleteOutputException
+
+    async def truncated(**params):
+        raise IncompleteOutputException(last_completion=None)
+
+    with pytest.raises(llm_client.LLMError, match="límite de 8192 tokens"):
+        await complete(truncated)

@@ -107,6 +107,7 @@ class CompressionReport:
     summarized: int = 0  # turnos integrados en el resumen
     cost_usd: float = 0.0
     summary_failed: bool = False
+    info: llm_client.LLMCallInfo | None = None  # la llamada del resumen, si la hubo
 
 
 async def compress(history: ConversationHistory, evicted: list[Turn]) -> CompressionReport:
@@ -136,6 +137,7 @@ async def compress(history: ConversationHistory, evicted: list[Turn]) -> Compres
             history.summarized_turns += len(to_summarize)
             report.summarized = len(to_summarize)
             report.cost_usd = info.cost_usd or 0.0
+            report.info = info
 
     if evicted:
         log.info(

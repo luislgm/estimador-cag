@@ -15,6 +15,8 @@ No usa las cachés: la respuesta depende del historial y de la memoria de la ses
 dos peticiones con el mismo texto no son equivalentes.
 """
 
+import time
+
 import structlog
 
 from app.config import get_settings
@@ -28,7 +30,7 @@ from app.services.attachments import Attachment
 from app.services.estimation import MAX_TOKENS, EstimationOutcome, build_outcome
 from app.services.llm_client import LLMCallInfo
 from app.services.render import render_markdown
-from app.sessions import ProjectMetadata, Session
+from app.sessions import ProjectMetadata, Session, TurnObservation
 from app.tiers import Tier, resolve_tier
 
 log = structlog.get_logger(module=__name__)
@@ -41,6 +43,7 @@ async def estimate_turn(
     tier_override: Tier | None = None,
     review: bool = False,
 ) -> EstimationOutcome:
+    started = time.perf_counter()
     # 0. Para quién es la respuesta (solo se guarda en la sesión si el turno sale bien)
     tier = resolve_tier(request.description, previous=session.tier, override=tier_override)
 
@@ -114,9 +117,32 @@ async def estimate_turn(
     session.tier = tier
 
     # 6. Compresión de los turnos que salen de la ventana (sin ella, simplemente se descartan)
+    compression_calls = []
     if evicted and get_settings().session_compression_enabled:
         report = await compression.compress(session.history, evicted)
         session.compression_cost_usd += report.cost_usd
+        compression_calls = [report.info] if report.info else []
+
+    # 7. Observación agregada del turno: un único evento con todo lo medible (ver Session)
+    turn_info = llm_client.combine_calls([info, *compression_calls])
+    attachments_chars = sum(a.chars for a in attachments)
+    session.last_turn = TurnObservation(
+        turn_index=session.history.total_turns,
+        session_id=session.id,
+        enriched_transcript_chars=len(request.description) + attachments_chars,
+        attachments_total_chars=attachments_chars,
+        messages_in_window=2 * len(session.history),
+        anchors_count=len(session.history.anchors),
+        summary_chars=len(session.history.summary or ""),
+        tokens_in=turn_info.input_tokens,
+        tokens_out=turn_info.output_tokens,
+        cost_usd=turn_info.cost_usd,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        cache_hit_kind="none",  # las sesiones no usan caché (la respuesta depende del historial)
+        last_resolved_tier=tier.tier.value,
+        llm_calls=(trace.llm_calls if trace else 1) + len(compression_calls),
+    )
+    log.info("turn_observed", **session.last_turn.model_dump())
     log.info(
         "session_turn_completed",
         session_id=session.id,

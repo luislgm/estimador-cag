@@ -151,6 +151,29 @@ class ConversationHistory:
         return len(self._turns)
 
 
+class TurnObservation(BaseModel):
+    """Todo lo observable de un turno en un único registro (evento turn_observed).
+
+    Junta lo que antes estaba repartido en varios logs (llamada al LLM, compresión, tier...)
+    para poder volcar una fila de CSV por turno sin reconciliar eventos ni timestamps.
+    """
+
+    turn_index: int = Field(..., description="Número de turno en la sesión (desde 1)")
+    session_id: str
+    enriched_transcript_chars: int = Field(..., description="Transcripción + texto de adjuntos")
+    attachments_total_chars: int = Field(..., description="Texto extraído de los adjuntos")
+    messages_in_window: int = Field(..., description="Mensajes de la ventana tras compresión")
+    anchors_count: int
+    summary_chars: int
+    tokens_in: int = Field(..., description="Tokens de entrada del turno (todas sus llamadas)")
+    tokens_out: int
+    cost_usd: float | None = Field(..., description="Coste del turno (todas sus llamadas)")
+    latency_ms: int = Field(..., description="Duración del turno completo en el servicio")
+    cache_hit_kind: str = Field(..., description="none | exact | semantic")
+    last_resolved_tier: str
+    llm_calls: int = Field(..., description="Llamadas al LLM del turno (estimación + resumen)")
+
+
 @dataclass
 class Session:
     id: str
@@ -158,6 +181,7 @@ class Session:
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
     compression_cost_usd: float = 0.0  # coste acumulado de las llamadas de resumen
     tier: TierResolution | None = None  # audiencia del último turno
+    last_turn: TurnObservation | None = None  # observación del último turno
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 

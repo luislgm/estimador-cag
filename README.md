@@ -54,7 +54,8 @@ estimador-cag/
 │   ├── golden_dataset.json     # Casos de referencia y lo que se espera de cada uno
 │   ├── dataset.py              # Carga y valida el dataset
 │   ├── metrics.py              # Métricas y umbrales
-│   └── run.py                  # python -m evals.run
+│   ├── run.py                  # python -m evals.run
+│   └── stress/                 # Prueba de carga del CAG (ver evals/stress/REPORT.md)
 ├── streamlit_app.py            # Cliente Streamlit (formulario)
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
@@ -567,6 +568,22 @@ uv run pytest -m eval -s                                    # lo mismo, como tes
 Imprime una tabla por caso (con el detalle de lo que falla) y el resumen por métrica, y guarda el informe completo en `evals/reports/` (ignorado por git) para comparar ejecuciones. Sale con código 1 si alguna métrica queda por debajo de su umbral, así que sirve como **puerta de regresión** antes de cambiar un prompt o un modelo.
 
 En pytest está marcado como `eval` y **excluido por defecto** (`addopts = "-m 'not eval'"`): `uv run pytest` y la CI no llaman al LLM. El código de las evals (dataset, métricas y runner) sí tiene sus tests normales, con el LLM simulado, en [`tests/test_evals.py`](tests/test_evals.py).
+
+## Prueba de carga del CAG
+
+[`evals/stress/`](evals/stress/) mide dónde empieza a romperse el CAG: conversaciones largas, adjuntos grandes y ráfagas. El resultado, con las curvas y la lectura, está en [`evals/stress/REPORT.md`](evals/stress/REPORT.md); los datos, en [`evals/stress/results.csv`](evals/stress/results.csv).
+
+- **Observación por turno:** cada turno emite un único evento `turn_observed` (y lo guarda en `session.last_turn`) con todo lo medible: tamaño de la entrada y de los adjuntos, mensajes en la ventana, anclas, longitud del resumen, tokens, coste, latencia, caché y tier. `GET /api/v1/sessions/{id}/snapshot` devuelve además el texto de las anclas y de la ventana.
+- **Escenarios** ([`scenarios.py`](evals/stress/scenarios.py)): tres conversaciones de 20 turnos (un proyecto que crece, uno que pivota de React a Flutter y uno que se contradice con el presupuesto), cada turno con el hecho que deberían recordar los siguientes.
+- **Adjuntos** ([`fixtures/build_pdfs.py`](evals/stress/fixtures/build_pdfs.py)): PDFs deterministas de 5, 20, 50 y 100 KB de texto, con un hecho al principio y otro al final (no se versionan; el runner los regenera).
+- **Métricas** ([`stress/metrics.py`](evals/stress/metrics.py)): `LatencyBudgetMetric`, `CostBudgetMetric` y `MemoryDriftMetric` (búsqueda literal del hecho en el resumen, las anclas, la metadata y, opcionalmente, la ventana).
+
+```bash
+uv run python -m evals.stress.run                          # 3 escenarios × 5 adjuntos × 3 repeticiones × 20 turnos
+uv run python -m evals.stress.run --burst 1,5,10,20 --skip-scenarios --append   # ráfagas
+uv run python -m evals.stress.run --http http://localhost:8000   # contra la API levantada
+uv run python -m evals.stress.report                       # tablas del informe a partir del CSV
+```
 
 ## Integración continua
 

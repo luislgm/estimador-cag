@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.critic import ACBTrace
 from app.schemas.estimation import EstimationResponse
-from app.sessions import ProjectMetadata
+from app.sessions import ProjectMetadata, TurnObservation
 from app.tiers import Tier
 
 
@@ -32,6 +32,17 @@ class SessionState(BaseModel):
         None, description="Qué la decidió: override, el nombre de una regla o sin_señales"
     )
     tier_inherited: bool = Field(False, description="True si se mantuvo del turno anterior")
+    last_turn: TurnObservation | None = Field(
+        None, description="Observación del último turno (lo mismo que el evento turn_observed)"
+    )
+
+
+class SessionSnapshot(SessionState):
+    """Estado completo de la memoria de la sesión, para depurar y para las pruebas de carga:
+    además del estado, el texto de las anclas y de los mensajes de la ventana."""
+
+    anchor_messages: list[dict] = Field(..., description="Anclas como mensajes user/assistant")
+    window_messages: list[dict] = Field(..., description="Mensajes de la ventana deslizante")
 
 
 class AttachmentInfo(BaseModel):

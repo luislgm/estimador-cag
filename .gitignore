@@ -21,3 +21,6 @@ coverage.xml
 
 # Informes de las evals (se generan en cada ejecución)
 evals/reports/
+
+# PDFs de la prueba de carga (se regeneran con evals.stress.fixtures.build_pdfs)
+evals/stress/fixtures/*.pdf

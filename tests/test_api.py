@@ -182,6 +182,7 @@ def test_openapi_docs(client):
         "/api/v1/sessions/{session_id}",
         "/api/v1/sessions/{session_id}/estimate",
         "/api/v1/sessions/{session_id}/estimate-acb",
+        "/api/v1/sessions/{session_id}/snapshot",
         "/health",
     }
 

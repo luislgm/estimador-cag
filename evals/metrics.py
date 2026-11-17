@@ -55,6 +55,10 @@ class MetricResult:
     score: float
     detail: str
 
+    @property
+    def passed(self) -> bool:
+        return self.score >= 1
+
 
 def normalize(text: str) -> str:
     """Minúsculas y sin tildes, para comparar conceptos."""

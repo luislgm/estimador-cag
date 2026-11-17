@@ -2,6 +2,7 @@
 
 POST /api/v1/sessions                        crea una sesión vacía
 GET  /api/v1/sessions/{session_id}           estado de la sesión (memoria y turnos)
+GET  /api/v1/sessions/{session_id}/snapshot  memoria completa (anclas y ventana), depuración
 POST /api/v1/sessions/{session_id}/estimate  un turno: transcripción + adjuntos (multipart)
 POST /api/v1/sessions/{session_id}/estimate-acb  lo mismo, con revisión Actor-Critic-Boss
 """
@@ -22,6 +23,7 @@ from app.schemas.session import (
     SessionACBResponse,
     SessionCreated,
     SessionEstimationResponse,
+    SessionSnapshot,
     SessionState,
 )
 from app.services import conversation
@@ -60,6 +62,7 @@ def _state(session: Session) -> SessionState:
         tier=session.tier.tier if session.tier else None,
         tier_rule=session.tier.rule if session.tier else None,
         tier_inherited=session.tier.inherited if session.tier else False,
+        last_turn=session.last_turn,
     )
 
 
@@ -154,6 +157,18 @@ async def _run_turn(session_id: str, form: TurnForm, review: bool) -> dict:
         ],
         "acb": outcome.acb,
     }
+
+
+@router.get("/{session_id}/snapshot", response_model=SessionSnapshot)
+async def get_session_snapshot(session_id: str) -> SessionSnapshot:
+    """La memoria completa de la sesión: resumen, anclas, ventana y metadata (depuración)."""
+    session = _get_session(session_id)
+    anchors = [m for turn in session.history.anchors for m in turn.as_messages()]
+    return SessionSnapshot(
+        **_state(session).model_dump(),
+        anchor_messages=anchors,
+        window_messages=session.history.messages()[len(anchors) :],
+    )
 
 
 @router.post(

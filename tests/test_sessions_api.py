@@ -186,6 +186,7 @@ async def test_create_and_get_session(client):
         "tier": None,
         "tier_rule": None,
         "tier_inherited": False,
+        "last_turn": None,
     }
 
 

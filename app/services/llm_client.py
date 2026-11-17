@@ -21,7 +21,7 @@ import instructor  # noqa: E402
 import litellm  # noqa: E402
 import openai  # noqa: E402
 import structlog  # noqa: E402
-from instructor.core import InstructorRetryException  # noqa: E402
+from instructor.core import IncompleteOutputException, InstructorRetryException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
 from app.config import Settings, get_settings  # noqa: E402
@@ -146,6 +146,11 @@ async def acomplete_structured(
         # El detalle de cada intento va al log; al cliente, solo un resumen
         log.debug("llm_validation_attempts", detail=str(e))
         message = f"la respuesta no pasó las validaciones tras {attempts} intentos"
+        raise _failed(LLMError(message), attempts, started) from e
+    except IncompleteOutputException as e:
+        # La respuesta se cortó al llegar a max_tokens. Sin esto se escapaba como excepción
+        # genérica (500 en la API); lo destapó la prueba de carga
+        message = f"la respuesta se cortó al llegar al límite de {max_tokens} tokens de salida"
         raise _failed(LLMError(message), attempts, started) from e
 
     usage = raw.usage  # Instructor acumula los tokens de todos los intentos
