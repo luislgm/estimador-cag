@@ -35,6 +35,15 @@ class IngestionJobView(BaseModel):
     error: str | None = None
 
 
+class DocumentView(BaseModel):
+    """Un documento ya procesado (limpio y seudonimizado), tal como se indexará."""
+
+    id: str
+    kind: str
+    text: str
+    metadata: dict[str, Any]
+
+
 class ForgetRequest(BaseModel):
     entity_type: Literal[PII_ENTITIES] = Field(..., description="Tipo de dato personal")  # type: ignore[valid-type]
     value: str = Field(..., min_length=1, description="El dato original (no se guarda)")

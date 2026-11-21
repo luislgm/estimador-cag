@@ -61,6 +61,7 @@ estimador-cag/
 │   ├── run.py                  # python -m evals.run
 │   └── stress/                 # Prueba de carga del CAG (ver evals/stress/REPORT.md)
 ├── streamlit_app.py            # Cliente Streamlit (formulario)
+├── pages/1_Ingesta.py          # Página de Streamlit para la ingesta de datos
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
 ```
@@ -619,6 +620,8 @@ POST   /api/v1/ingestion/runs            {"source": "budgets_2024"} -> 202 + job
 GET    /api/v1/ingestion/jobs/{job_id}   estado e informe: reparados, cuarentena, descartados, seudónimos
 DELETE /api/v1/ingestion/pseudonyms      {"entity_type": "PERSON", "value": "..."} -> derecho de supresión
 ```
+
+En Streamlit, la página **Ingesta** ([`pages/1_Ingesta.py`](pages/1_Ingesta.py), en el menú lateral) hace todo esto sin Swagger: el catálogo, un botón para ingerir cada fuente (espera a que el trabajo termine), el informe con la cuarentena y los descartes, una vista previa de los documentos seudonimizados (`GET /api/v1/ingestion/jobs/{id}/documents`) y el formulario del derecho de supresión.
 
 Para ingerir fuentes con datos personales hace falta `PII_SALT` en el `.env` (una cadena aleatoria y secreta). spaCy, Presidio y pandas hacen la imagen Docker bastante más pesada (~1,5 GB).
 

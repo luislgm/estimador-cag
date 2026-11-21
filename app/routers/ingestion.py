@@ -3,6 +3,7 @@
 GET    /api/v1/ingestion/sources         el catálogo: qué fuentes hay y cuáles se ingieren
 POST   /api/v1/ingestion/runs            lanza la ingesta de una fuente (202 + job_id)
 GET    /api/v1/ingestion/jobs/{job_id}   estado e informe de una ejecución
+GET    /api/v1/ingestion/jobs/{job_id}/documents   documentos que ha producido (vista previa)
 DELETE /api/v1/ingestion/pseudonyms      derecho de supresión: olvida el seudónimo de un dato
 
 El router es fino: valida la fuente contra el catálogo antes de aceptar el trabajo (así una
@@ -11,8 +12,11 @@ orquestador en segundo plano. Sin DATABASE_URL, los endpoints que necesitan la b
 responden 503 (la ingesta sigue disponible por CLI).
 """
 
+import json
+from pathlib import Path
+
 import structlog
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 
 from app.config import get_settings
 from app.ingestion.catalog import load_catalog
@@ -22,6 +26,7 @@ from app.ingestion.parsers import default_registry
 from app.ingestion.pii import Pseudonymizer, hash_value
 from app.persistence import JobRepository, SqlMappingStore, session_factory
 from app.schemas.ingestion import (
+    DocumentView,
     ForgetRequest,
     ForgetResponse,
     IngestionJobView,
@@ -119,6 +124,31 @@ async def get_job(job_id: str) -> IngestionJobView:
     if job is None:
         raise HTTPException(status_code=404, detail="Trabajo no encontrado")
     return _view(job)
+
+
+@router.get("/jobs/{job_id}/documents", response_model=list[DocumentView])
+async def get_job_documents(
+    job_id: str, limit: int = Query(20, ge=1, le=200)
+) -> list[DocumentView]:
+    """Los primeros documentos que produjo un trabajo terminado, leídos de su JSONL."""
+    job = JobRepository(_sessions()).get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    output = (job.report or {}).get("output")
+    if job.status != "completed" or not output or not Path(output).exists():
+        raise HTTPException(status_code=409, detail="El trabajo no tiene documentos (todavía)")
+    documents = []
+    with Path(output).open(encoding="utf-8") as lines:
+        for line in lines:
+            if len(documents) == limit:
+                break
+            data = json.loads(line)
+            documents.append(
+                DocumentView(
+                    id=data["id"], kind=data["kind"], text=data["text"], metadata=data["metadata"]
+                )
+            )
+    return documents
 
 
 @router.delete("/pseudonyms", response_model=ForgetResponse)

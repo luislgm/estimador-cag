@@ -179,6 +179,7 @@ def test_openapi_docs(client):
     assert set(paths) == {
         "/api/v1/estimate",
         "/api/v1/ingestion/jobs/{job_id}",
+        "/api/v1/ingestion/jobs/{job_id}/documents",
         "/api/v1/ingestion/pseudonyms",
         "/api/v1/ingestion/runs",
         "/api/v1/ingestion/sources",

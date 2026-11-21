@@ -116,6 +116,26 @@ def test_run_ingests_in_the_background_and_reports(api, database, tmp_path):
         assert session.query(PseudonymMapping).count() >= 3
 
 
+def test_documents_of_a_job_are_pseudonymized(api, database):
+    job_id = api.post("/api/v1/ingestion/runs", json={"source": "meeting_transcripts"}).json()[
+        "job_id"
+    ]
+
+    documents = api.get(f"/api/v1/ingestion/jobs/{job_id}/documents?limit=1").json()
+
+    assert len(documents) == 1 and documents[0]["kind"] == "transcript"
+    assert "María García" not in documents[0]["text"]
+    assert "participants" in documents[0]["metadata"]
+
+
+def test_documents_need_a_completed_job(api, database):
+    jobs = JobRepository(database)
+    pending = jobs.create("budgets_2024")
+
+    assert api.get("/api/v1/ingestion/jobs/no-existe/documents").status_code == 404
+    assert api.get(f"/api/v1/ingestion/jobs/{pending}/documents").status_code == 409
+
+
 def test_excluded_or_unknown_sources_are_rejected_at_once(api, database):
     excluded = api.post("/api/v1/ingestion/runs", json={"source": "crm_contacts_export"})
     unknown = api.post("/api/v1/ingestion/runs", json={"source": "no_existe"})
