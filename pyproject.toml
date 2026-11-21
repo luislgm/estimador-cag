@@ -44,7 +44,9 @@ build-backend = "uv_build"
 package = false
 
 [tool.uv.sources]
-es-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" }
+# Modelo de spaCy en español (Presidio). Solo se publica en GitHub Releases, que devolvía 403 a
+# los runners de GitHub Actions: se incluye el wheel oficial en vendor/ (mismo sha256)
+es-core-news-sm = { path = "vendor/es_core_news_sm-3.8.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

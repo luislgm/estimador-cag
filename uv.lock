@@ -961,9 +961,9 @@ wheels = [
 [[package]]
 name = "es-core-news-sm"
 version = "3.8.0"
-source = { url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" }
+source = { path = "vendor/es_core_news_sm-3.8.0-py3-none-any.whl" }
 wheels = [
-    { url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl", hash = "sha256:e451a83d6df79b87e9eed0cb553f03e99e36a3bab18a7b79f0dcfd1fdf875e12" },
+    { filename = "es_core_news_sm-3.8.0-py3-none-any.whl", hash = "sha256:e451a83d6df79b87e9eed0cb553f03e99e36a3bab18a7b79f0dcfd1fdf875e12" },
 ]
 
 [[package]]
@@ -1017,7 +1017,7 @@ ui = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "arize-phoenix-otel", specifier = ">=0.17.2" },
-    { name = "es-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" },
+    { name = "es-core-news-sm", path = "vendor/es_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "faker", specifier = ">=24.0" },
     { name = "fastapi", specifier = ">=0.143.3" },
     { name = "instructor", specifier = ">=1.17.0" },

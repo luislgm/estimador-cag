@@ -11,6 +11,8 @@ WORKDIR /app
 
 # Primero solo los archivos de dependencias, para aprovechar la caché de capas
 COPY pyproject.toml uv.lock ./
+# Wheel del modelo de spaCy (dependencia local, ver pyproject.toml)
+COPY vendor ./vendor
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
