@@ -19,3 +19,6 @@ tests/
 README.md
 Dockerfile
 docker-compose.yml
+
+# Salida local de la ingesta
+data/processed/

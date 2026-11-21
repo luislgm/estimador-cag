@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 
 from app.config import get_settings
 from app.logging_config import setup_logging
-from app.routers import estimations, sessions
+from app.routers import estimations, ingestion, sessions
 from app.schemas.health import HealthResponse
 from app.tracing import setup_tracing
 
@@ -64,6 +64,7 @@ async def request_context(request: Request, call_next):
 
 app.include_router(estimations.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
+app.include_router(ingestion.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["health"], response_model=HealthResponse)

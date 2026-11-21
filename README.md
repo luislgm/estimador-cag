@@ -48,8 +48,12 @@ estimador-cag/
 │   │   ├── render.py           # Resultado estructurado -> markdown según el formato
 │   │   ├── cache.py            # Caché exacta en Redis
 │   │   └── semantic_cache.py   # Caché semántica (Redis Stack + embeddings)
+│   ├── ingestion/              # Ingesta de datos: catálogo, parsers, limpieza, seudonimización
+│   ├── persistence.py          # Base de datos de la ingesta (SQLAlchemy): seudónimos y trabajos
 │   ├── logging_config.py       # Logs estructurados (structlog)
 │   └── tracing.py              # Trazas del LLM en Arize Phoenix (opcional)
+├── alembic/                    # Migraciones de la base de datos de la ingesta
+├── data/                       # Catálogo de fuentes (catalog.yaml) y datos de ejemplo (seed/)
 ├── evals/                      # Evals con el LLM real: golden dataset, métricas y runner
 │   ├── golden_dataset.json     # Casos de referencia y lo que se espera de cada uno
 │   ├── dataset.py              # Carga y valida el dataset
@@ -584,6 +588,39 @@ uv run python -m evals.stress.run --burst 1,5,10,20 --skip-scenarios --append   
 uv run python -m evals.stress.run --http http://localhost:8000   # contra la API levantada
 uv run python -m evals.stress.report                       # tablas del informe a partir del CSV
 ```
+
+## Ingesta de datos (preparación de RAG)
+
+[`app/ingestion/`](app/ingestion/) convierte los datos de la empresa (presupuestos, transcripciones de reuniones, tarifas) en documentos limpios y seudonimizados, listos para indexar:
+
+```
+catálogo -> carga -> parseo (+ reparación) -> validación -> deduplicado -> seudonimización -> JSONL
+```
+
+- **Catálogo** ([`data/catalog.yaml`](data/catalog.yaml)): cada fuente con su responsable, su calidad (completitud, consistencia, actualidad y fiabilidad, de 1 a 5), si tiene datos personales y una decisión: `include`, `review` (problemas conocidos, pendiente de su responsable) o `exclude`. Excluir o dejar en revisión exige un motivo. `uv run python -m app.ingestion.catalog` muestra el inventario.
+- **Parsers** ([`parsers.py`](app/ingestion/parsers.py)): uno por formato (JSON de presupuestos, TXT de transcripciones con cabecera, Excel de tarifas), todos devuelven `Document`, el contrato común.
+- **Limpieza** ([`cleaning.py`](app/ingestion/cleaning.py)): los presupuestos se **reparan** (espacios, moneda en minúsculas, importes como "12.500,00", fechas dd/mm/aaaa), se ponen en **cuarentena** si les falta un dato recuperable (el nombre del cliente) o se **descartan** si están mal de raíz (importe negativo, identificador inválido). Pandera con `lazy=True` recoge todos los fallos, no solo el primero. De varias versiones de un presupuesto queda la última.
+- **Seudonimización** ([`pii.py`](app/ingestion/pii.py)): Presidio con spaCy en español detecta personas, emails, teléfonos, DNI/NIE, IBAN y tarjetas, y los sustituye por datos ficticios de Faker. El almacén guarda `(tipo, HMAC(sal, dato)) -> seudónimo`: la misma persona es la misma persona ficticia en todos los documentos, y la base de datos no contiene los datos originales. `DELETE /api/v1/ingestion/pseudonyms` borra la relación (derecho de supresión, art. 17); como el seudónimo no se deriva del dato, después ya nadie puede reconstruirla.
+  - Las empresas y las ciudades no se tratan: no son datos personales y se necesitan para estimar.
+  - Para evitar falsos positivos del modelo pequeño ("Reunión", "Presupuesto BUDGET"), una persona necesita nombre y apellido; a cambio, un nombre suelto ("Pedro") no se detecta. Cada nombre detectado se busca en todo el documento, porque el modelo no detecta igual a la misma persona en todas las frases.
+- **Decisión de arquitectura** ([`architecture.py`](app/ingestion/architecture.py)): `uv run python -m app.ingestion.architecture [--scale N]` evalúa si el corpus cabe en CAG (ventana, coste, latencia y *lost in the middle*, con los datos del [stress test](evals/stress/REPORT.md)) y recomienda CAG, híbrido o RAG.
+
+Por CLI (sin base de datos; los seudónimos, en memoria):
+
+```bash
+PII_SALT=... uv run python -m app.ingestion.orchestrator --all      # escribe data/processed/*.jsonl
+```
+
+Por API (necesita `DATABASE_URL`; en Docker, Postgres ya va en `docker-compose.yml` y las migraciones de Alembic se aplican al arrancar):
+
+```
+GET    /api/v1/ingestion/sources         el catálogo
+POST   /api/v1/ingestion/runs            {"source": "budgets_2024"} -> 202 + job_id (en segundo plano)
+GET    /api/v1/ingestion/jobs/{job_id}   estado e informe: reparados, cuarentena, descartados, seudónimos
+DELETE /api/v1/ingestion/pseudonyms      {"entity_type": "PERSON", "value": "..."} -> derecho de supresión
+```
+
+Para ingerir fuentes con datos personales hace falta `PII_SALT` en el `.env` (una cadena aleatoria y secreta). spaCy, Presidio y pandas hacen la imagen Docker bastante más pesada (~1,5 GB).
 
 ## Integración continua
 

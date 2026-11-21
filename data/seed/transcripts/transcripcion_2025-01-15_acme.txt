@@ -1,0 +1,8 @@
+Fecha: 2025-01-15
+Cliente: Acme Logística (CLI-0042)
+Participantes: María García López (Acme), Carlos Pérez Soto (comercial)
+
+María García López: Necesitamos ampliar el portal de pedidos con una app móvil para los repartidores.
+Carlos Pérez Soto: ¿Qué tiene que hacer la app?
+María García López: Ver la ruta del día, marcar las entregas y recoger la firma del cliente. Si hay dudas, escribidme a maria.garcia@acme-logistica.es o llamadme al 612 345 678.
+Carlos Pérez Soto: Perfecto, os preparamos una estimación para la app y la integración con el portal actual.

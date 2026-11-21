@@ -24,3 +24,6 @@ evals/reports/
 
 # PDFs de la prueba de carga (se regeneran con evals.stress.fixtures.build_pdfs)
 evals/stress/fixtures/*.pdf
+
+# Salida de la ingesta (se regenera con python -m app.ingestion.orchestrator)
+data/processed/

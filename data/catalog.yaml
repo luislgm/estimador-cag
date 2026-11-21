@@ -1,0 +1,56 @@
+# Catálogo de fuentes de datos: qué se ingiere, por qué y con qué garantías.
+# Cada fuente tiene una decisión explícita (include, review o exclude). Excluir o dejar en
+# revisión exige un motivo: no ingerir algo es una decisión defendible, no un olvido.
+version: "2026-11-21"
+sources:
+  - name: budgets_2024
+    description: Presupuestos enviados a clientes en 2024 (export JSON del sistema comercial)
+    owner: Ventas
+    path: seed/budgets/*.json
+    format: budget_json
+    refresh: monthly
+    decision: include
+    quality: {completeness: 3, consistency: 2, actuality: 4, reliability: 4}
+    sensitivity: {contains_pii: true, pii_types: [PERSON, EMAIL_ADDRESS, PHONE_NUMBER]}
+
+  - name: meeting_transcripts
+    description: Transcripciones de reuniones comerciales con clientes
+    owner: Preventa
+    path: seed/transcripts/*.txt
+    format: transcript_txt
+    refresh: weekly
+    decision: include
+    quality: {completeness: 4, consistency: 4, actuality: 5, reliability: 3}
+    sensitivity: {contains_pii: true, pii_types: [PERSON, EMAIL_ADDRESS, PHONE_NUMBER]}
+
+  - name: rate_card_2024
+    description: Tarifas por rol vigentes en 2024
+    owner: Finanzas
+    path: seed/rate_card_2024.xlsx
+    format: rate_card_xlsx
+    refresh: yearly
+    decision: include
+    quality: {completeness: 5, consistency: 5, actuality: 3, reliability: 5}
+    sensitivity: {contains_pii: false}
+
+  - name: transcripts_legacy
+    description: Notas de reuniones del sistema anterior (2023)
+    owner: Preventa
+    path: seed/transcripts_legacy/*.txt
+    format: transcript_txt
+    refresh: never
+    decision: review
+    decision_reason: Formato antiguo sin fecha ni participantes; pendiente de que Preventa confirme si siguen siendo representativas
+    quality: {completeness: 1, consistency: 1, actuality: 1, reliability: 2}
+    sensitivity: {contains_pii: true, pii_types: [PERSON]}
+
+  - name: crm_contacts_export
+    description: Export completo de contactos del CRM
+    owner: Marketing
+    path: seed/crm/*.csv
+    format: csv
+    refresh: daily
+    decision: exclude
+    decision_reason: Datos personales de contactos sin base legal para usarlos en la estimación (RGPD, minimización); no aportan información sobre proyectos
+    quality: {completeness: 4, consistency: 3, actuality: 5, reliability: 4}
+    sensitivity: {contains_pii: true, pii_types: [PERSON, EMAIL_ADDRESS, PHONE_NUMBER]}

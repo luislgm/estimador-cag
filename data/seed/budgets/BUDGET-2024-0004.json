@@ -1,0 +1,12 @@
+{
+  "budget_id": "BUDGET-2024-0004",
+  "version": 1,
+  "client_name": "Cafeterías Sol",
+  "client_code": "CLI-0201",
+  "contact": {"name": "Pablo Sánchez Mora", "email": "pablo@cafeteriassol.es", "phone": "633 222 111"},
+  "date": "2024-06-01",
+  "currency": "EUR",
+  "total_amount": -4200,
+  "items": [{"concept": "App de fidelización", "hours": 260}],
+  "notes": "Importe negativo por un error al exportar del sistema antiguo."
+}

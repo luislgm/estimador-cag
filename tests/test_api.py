@@ -178,6 +178,10 @@ def test_openapi_docs(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert set(paths) == {
         "/api/v1/estimate",
+        "/api/v1/ingestion/jobs/{job_id}",
+        "/api/v1/ingestion/pseudonyms",
+        "/api/v1/ingestion/runs",
+        "/api/v1/ingestion/sources",
         "/api/v1/sessions",
         "/api/v1/sessions/{session_id}",
         "/api/v1/sessions/{session_id}/estimate",

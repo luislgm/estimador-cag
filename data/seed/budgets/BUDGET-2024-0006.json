@@ -1,0 +1,12 @@
+{
+  "budget_id": "BUDG-24-6",
+  "version": 1,
+  "client_name": "Distribuciones Vega",
+  "client_code": "CLI-0300",
+  "contact": {"name": "Andrés Romero Pinto", "email": "aromero@vega.es", "phone": "644 555 666"},
+  "date": "2024-08-05",
+  "currency": "EUR",
+  "total_amount": 15000,
+  "items": [{"concept": "Portal de pedidos", "hours": 300}],
+  "notes": "Identificador del sistema antiguo, sin el formato actual."
+}

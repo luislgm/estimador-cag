@@ -48,15 +48,18 @@ _PROMPT_INJECTION_PATTERNS = [
 ]
 _INJECTION_RE = [re.compile(p, re.IGNORECASE | re.DOTALL) for p in _PROMPT_INJECTION_PATTERNS]
 
+# Móvil o fijo español (empieza por 6, 7, 8 o 9) con prefijo opcional, o internacional.
+# Pública porque la reutiliza el reconocedor de teléfonos de la seudonimización (ingesta)
+SPANISH_PHONE_REGEX = (
+    r"(?<![\d.,])(?:\+34[\s.-]?)?[6789]\d{2}"
+    r"(?:[\s.-]?\d{3}[\s.-]?\d{3}|(?:[\s.-]?\d{2}){3})(?!\d|[.,]\d)"
+)
+
 _PII_PATTERNS = {
     "email": re.compile(r"[\w.%+-]+@[\w-]+(\.[\w-]+)*\.[A-Za-z]{2,}"),
     "iban": re.compile(r"\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){3,7}\b"),
     "dni_nie": re.compile(r"\b[XYZ]?\d{7,8}-?[A-HJ-NP-TV-Z]\b"),
-    # Móvil o fijo español (empieza por 6, 7, 8 o 9) con prefijo opcional, o internacional
-    "phone": re.compile(
-        r"(?<![\d.,])(?:\+34[\s.-]?)?[6789]\d{2}"
-        r"(?:[\s.-]?\d{3}[\s.-]?\d{3}|(?:[\s.-]?\d{2}){3})(?!\d|[.,]\d)"
-    ),
+    "phone": re.compile(SPANISH_PHONE_REGEX),
 }
 
 

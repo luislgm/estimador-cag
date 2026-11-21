@@ -1,0 +1,15 @@
+{
+  "budget_id": "BUDGET-2024-0002",
+  "version": 1,
+  "client_name": "  Beta Norte Seguros ",
+  "client_code": "CLI-0107",
+  "contact": {"name": "Jorge Martín Ruiz", "email": "jmartin@betanorte.com", "phone": "+34 699 111 222"},
+  "date": "02/04/2024",
+  "currency": "eur",
+  "total_amount": "12.500,00",
+  "items": [
+    {"concept": "App móvil de partes de siniestro", "hours": 180},
+    {"concept": "Panel de tramitación", "hours": 70}
+  ],
+  "notes": "App para que los asegurados envíen partes con fotos."
+}

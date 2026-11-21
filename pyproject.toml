@@ -5,19 +5,30 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.13",
     "arize-phoenix-otel>=0.17.2",
+    "es-core-news-sm",
+    "faker>=24.0",
     "fastapi>=0.143.3",
     "instructor>=1.17.0",
     "jinja2>=3.1.6",
     "litellm[mcp]>=1.106.6",
     "openinference-instrumentation-litellm>=0.1.52",
+    "openpyxl>=3.1",
+    "pandas>=2.2",
+    "pandera>=0.20",
+    "presidio-analyzer>=2.2",
+    "psycopg[binary]>=3.1",
     "pydantic-settings>=2.16.0",
     "pypdf>=7.0.0",
     "python-docx>=1.2.0",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.32",
+    "pyyaml>=6.0",
     "redis>=8.1.0",
     "redisvl>=0.31.0",
+    "spacy>=3.8",
+    "sqlalchemy>=2.0",
     "structlog>=26.1.0",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -31,6 +42,9 @@ build-backend = "uv_build"
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+es-core-news-sm = { url = "https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl" }
 
 [dependency-groups]
 dev = [

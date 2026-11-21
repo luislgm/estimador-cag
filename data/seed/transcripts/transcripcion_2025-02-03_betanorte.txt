@@ -1,0 +1,8 @@
+Fecha: 2025-02-03
+Cliente: Beta Norte Seguros (CLI-0107)
+Participantes: Jorge Martín Ruiz (Beta Norte), Ana López Ferrer (preventa)
+
+Jorge Martín Ruiz: La app de partes funciona bien, ahora queremos que los peritos validen los partes desde una tablet.
+Ana López Ferrer: ¿Con conexión siempre o también sin cobertura?
+Jorge Martín Ruiz: También sin cobertura. El responsable técnico es Raúl Ibáñez Cano, su correo es raul.ibanez@betanorte.com.
+Ana López Ferrer: Entendido, incluimos el modo sin conexión en la estimación.

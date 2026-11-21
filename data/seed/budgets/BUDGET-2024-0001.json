@@ -1,0 +1,17 @@
+{
+  "budget_id": "BUDGET-2024-0001",
+  "version": 1,
+  "client_name": "Acme Logística",
+  "client_code": "CLI-0042",
+  "contact": {"name": "María García López", "email": "maria.garcia@acme-logistica.es", "phone": "612 345 678"},
+  "date": "2024-03-15",
+  "currency": "EUR",
+  "total_amount": 18000,
+  "items": [
+    {"concept": "Descubrimiento y diseño", "hours": 60},
+    {"concept": "Portal web de pedidos", "hours": 200},
+    {"concept": "Integración con el ERP", "hours": 80},
+    {"concept": "Pruebas y despliegue", "hours": 20}
+  ],
+  "notes": "Portal B2B para que los clientes de Acme hagan pedidos. Contacto: María García López."
+}

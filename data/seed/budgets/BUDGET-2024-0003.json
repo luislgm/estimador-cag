@@ -1,0 +1,12 @@
+{
+  "budget_id": "BUDGET-2024-0003",
+  "version": 1,
+  "client_name": null,
+  "client_code": "CLI-0150",
+  "contact": {"name": "Lucía Fernández Gil", "email": "lucia.fernandez@example.org", "phone": "655 44 33 22"},
+  "date": "2024-05-20",
+  "currency": "EUR",
+  "total_amount": 9500,
+  "items": [{"concept": "Cuadro de mando comercial", "hours": 190}],
+  "notes": "Falta confirmar la razón social del cliente."
+}

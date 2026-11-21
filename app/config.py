@@ -1,7 +1,8 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,6 +50,16 @@ class Settings(BaseSettings):
     # Ciclo Actor-Critic-Boss (POST /sessions/{id}/estimate-acb): vueltas como mucho, cada una
     # con una estimación del actor y una revisión del crítico
     acb_max_iterations: int = Field(default=2, ge=1, le=4)
+
+    # Ingesta de datos (app/ingestion): catálogo y datos de origen, y salida procesada
+    data_dir: Path = Path("data")
+    processed_dir: Path = Path("data/processed")
+    # Base de datos de la ingesta (trabajos y seudónimos). Sin URL, el endpoint no se activa
+    # (el CLI funciona igual, con los seudónimos en memoria). Ej.: postgresql+psycopg://...
+    database_url: str | None = None
+    # Sal secreta del HMAC de la seudonimización. Sin ella no se ingieren fuentes con datos
+    # personales: con una sal conocida, los hashes se podrían revertir por fuerza bruta.
+    pii_salt: SecretStr | None = None
 
     # Trazas de las llamadas al LLM en Arize Phoenix (opcional: sin endpoint no se activa)
     phoenix_collector_endpoint: str | None = None

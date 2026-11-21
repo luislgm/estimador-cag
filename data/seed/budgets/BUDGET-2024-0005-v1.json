@@ -1,0 +1,16 @@
+{
+  "budget_id": "BUDGET-2024-0005",
+  "version": 1,
+  "client_name": "Clínicas Mediterráneo",
+  "client_code": "CLI-0233",
+  "contact": {"name": "Elena Torres Vidal", "email": "etorres@clinicasmed.es", "phone": "611 987 654"},
+  "date": "2024-07-10",
+  "currency": "EUR",
+  "total_amount": 22000,
+  "items": [
+    {"concept": "Plataforma de reservas", "hours": 300},
+    {"concept": "Recordatorios por SMS", "hours": 40},
+    {"concept": "Pagos online", "hours": 100}
+  ],
+  "notes": "Primera versión."
+}
