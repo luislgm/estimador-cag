@@ -49,6 +49,7 @@ estimador-cag/
 │   │   ├── cache.py            # Caché exacta en Redis
 │   │   └── semantic_cache.py   # Caché semántica (Redis Stack + embeddings)
 │   ├── ingestion/              # Ingesta de datos: catálogo, parsers, limpieza, seudonimización
+│   ├── embedding_pipeline/     # Presupuestos JSON -> chunks estructurales -> embeddings
 │   ├── persistence.py          # Base de datos de la ingesta (SQLAlchemy): seudónimos y trabajos
 │   ├── logging_config.py       # Logs estructurados (structlog)
 │   └── tracing.py              # Trazas del LLM en Arize Phoenix (opcional)
@@ -62,6 +63,7 @@ estimador-cag/
 │   └── stress/                 # Prueba de carga del CAG (ver evals/stress/REPORT.md)
 ├── streamlit_app.py            # Cliente Streamlit (formulario)
 ├── pages/1_Ingesta.py          # Página de Streamlit para la ingesta de datos
+├── scripts/compare.py          # Similitud coseno entre dos textos (sanity check de embeddings)
 ├── .env.example                # Plantilla de variables de entorno
 └── pyproject.toml              # Dependencias (gestionadas con uv)
 ```
@@ -624,6 +626,40 @@ DELETE /api/v1/ingestion/pseudonyms      {"entity_type": "PERSON", "value": "...
 En Streamlit, la página **Ingesta** ([`pages/1_Ingesta.py`](pages/1_Ingesta.py), en el menú lateral) hace todo esto sin Swagger: el catálogo, un botón para ingerir cada fuente (espera a que el trabajo termine), el informe con la cuarentena y los descartes, una vista previa de los documentos seudonimizados (`GET /api/v1/ingestion/jobs/{id}/documents`) y el formulario del derecho de supresión.
 
 Para ingerir fuentes con datos personales hace falta `PII_SALT` en el `.env` (una cadena aleatoria y secreta). spaCy, Presidio y pandas hacen la imagen Docker bastante más pesada (~1,5 GB).
+
+## Pipeline de embeddings (sesión 7)
+
+[`app/embedding_pipeline/`](app/embedding_pipeline/) convierte presupuestos históricos en JSON ([`data/budgets_sample.json`](data/budgets_sample.json), 15 presupuestos y 52 componentes) en vectores listos para la búsqueda semántica:
+
+```
+presupuestos -> JSONStructuralChunker (un componente = un chunk) -> OpenAIEmbedder -> chunks con su embedding
+```
+
+- **Chunker estructural** ([`chunker.py`](app/embedding_pipeline/chunker.py)): un chunk por componente, sin partir por tamaño ni solapar. El texto empieza con el contexto del presupuesto (proyecto, sector, año y tecnología principal), para que un "Authentication backend" no pierda a qué proyecto pertenece. Los campos filtrables (sector, tecnología, año, complejidad, horas) van en `metadata` y no se embeben. `chunk_id` = `{budget_id}::{component_id}`, y `token_count` se cuenta con tiktoken.
+- **Embedder** ([`embedder.py`](app/embedding_pipeline/embedder.py)): `text-embedding-3-small` (1536 dimensiones) con el SDK de OpenAI, en lotes de 100 textos por petición. Si OpenAI devuelve *rate limit*, reintenta 3 veces (esperando 1, 2 y 4 s); el resto de errores se propagan. Registra cada lote (chunks, tokens y latencia) y estima el coste (0,02 USD por millón de tokens).
+- **Esquemas** ([`schemas.py`](app/embedding_pipeline/schemas.py)): sector y complejidad cerrados; las horas totales tienen que cuadrar con los componentes y las dependencias, apuntar a componentes del mismo presupuesto. Si no, 422.
+- Los vectores se devuelven por HTTP y no se guardan: la persistencia (pgvector) y la búsqueda llegan en la sesión 8.
+
+**Endpoint** (también desde http://localhost:8000/docs, sección *embeddings*):
+
+```bash
+python -c "import json; print(json.dumps({'budgets': json.load(open('data/budgets_sample.json'))}))" > /tmp/ingest.json
+curl -s -X POST http://localhost:8000/embeddings/ingest -H "Content-Type: application/json" -d @/tmp/ingest.json
+```
+
+Devuelve `chunks` (cada uno con `chunk_id`, `text`, `metadata`, `token_count` y `embedding`) y `stats` (`total_budgets`, `total_chunks`, `total_tokens`, `estimated_cost_usd`). Errores: 422 si el JSON no cumple el esquema, 503 sin `OPENAI_API_KEY` y 500 si falla la API de embeddings (mensaje genérico; el detalle va al log).
+
+**Similitud entre dos textos** ([`scripts/compare.py`](scripts/compare.py)), que necesita `OPENAI_API_KEY`:
+
+```bash
+# Fuera del contenedor (lee el .env)
+uv run python scripts/compare.py --text-a "OAuth 2.0 authentication backend for fintech" --text-b "JWT-based authorization service for banking app"
+
+# Dentro del contenedor
+docker compose exec api python scripts/compare.py --text-a "..." --text-b "..."
+```
+
+Los resultados del sanity check con las tres parejas del ejercicio, y su lectura, están en [`SANITY_CHECK.md`](app/embedding_pipeline/SANITY_CHECK.md).
 
 ## Integración continua
 

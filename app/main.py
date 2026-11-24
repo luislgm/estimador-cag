@@ -6,6 +6,7 @@ import structlog
 from fastapi import FastAPI, Request
 
 from app.config import get_settings
+from app.embedding_pipeline.router import router as embeddings_router
 from app.logging_config import setup_logging
 from app.routers import estimations, ingestion, sessions
 from app.schemas.health import HealthResponse
@@ -65,6 +66,8 @@ async def request_context(request: Request, call_next):
 app.include_router(estimations.router, prefix="/api/v1")
 app.include_router(sessions.router, prefix="/api/v1")
 app.include_router(ingestion.router, prefix="/api/v1")
+# Ruta fija del ejercicio de la sesión 7: POST /embeddings/ingest (sin /api/v1)
+app.include_router(embeddings_router)
 
 
 @app.get("/health", tags=["health"], response_model=HealthResponse)

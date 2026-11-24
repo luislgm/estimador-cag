@@ -29,6 +29,8 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY --chown=appuser:appuser data ./data
+# Scripts de línea de comandos (p. ej. scripts/compare.py)
+COPY scripts ./scripts
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
